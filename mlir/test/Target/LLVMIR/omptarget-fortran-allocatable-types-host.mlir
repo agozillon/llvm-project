@@ -99,7 +99,7 @@ module attributes {omp.is_target_device = false} {
     %76 = llvm.load %75 : !llvm.ptr -> i64
     %77 = llvm.sub %74, %10  : i64
     %78 = omp.bounds lower_bound(%11 : i64) upper_bound(%77 : i64) stride(%76 : i64) start_idx(%72 : i64) {stride_in_bytes = true}
-    %79 = omp.map_info var_ptr(%12 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>) map_clauses(tofrom) capture(ByRef) bounds(%78) -> !llvm.ptr {is_fortran_allocatable = true, name = "full_arr"}
+    %79 = omp.map_info var_ptr(%12 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>) map_clauses(tofrom) capture(ByRef) bounds(%78) -> !llvm.ptr {is_fortran_allocatable, name = "full_arr"}
     %80 = llvm.load %34 : !llvm.ptr -> !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
     llvm.store %80, %1 : !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>, !llvm.ptr
     %81 = llvm.getelementptr %1[0, 7, %11, 0] : (!llvm.ptr, i64) -> !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
@@ -110,8 +110,8 @@ module attributes {omp.is_target_device = false} {
     %86 = llvm.sub %9, %82  : i64
     %87 = llvm.sub %8, %82  : i64
     %88 = omp.bounds lower_bound(%86 : i64) upper_bound(%87 : i64) stride(%85 : i64) start_idx(%82 : i64) {stride_in_bytes = true}
-    %89 = omp.map_info var_ptr(%34 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>) map_clauses(tofrom) capture(ByRef) bounds(%88) -> !llvm.ptr {is_fortran_allocatable = true, name = "sect_arr(2:5)"}
-    %90 = omp.map_info var_ptr(%14 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)>) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {is_fortran_allocatable = true, name = "scalar"}
+    %89 = omp.map_info var_ptr(%34 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>) map_clauses(tofrom) capture(ByRef) bounds(%88) -> !llvm.ptr {is_fortran_allocatable, name = "sect_arr(2:5)"}
+    %90 = omp.map_info var_ptr(%14 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)>) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {is_fortran_allocatable, name = "scalar"}
     omp.target map_entries(%79 -> %arg0, %89 -> %arg1, %90 -> %arg2 : !llvm.ptr, !llvm.ptr, !llvm.ptr) {
     ^bb0(%arg0: !llvm.ptr, %arg1: !llvm.ptr, %arg2: !llvm.ptr):
       %91 = llvm.mlir.constant(1 : i32) : i32

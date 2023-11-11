@@ -1754,21 +1754,6 @@ llvm::Value *getSizeInBytes(DataLayout &dl, const mlir::Type &type,
   return builder.getInt64(underlyingTypeSzInBits / 8);
 }
 
-// Get the underlying LLVM type, this will bypass the pointer and
-// access the underlying type. Which bypasses llvm's opaque pointers
-// to get the underlying type via MLIR.
-llvm::Type *getLLVMIRType(mlir::Type inputType,
-                          LLVM::ModuleTranslation &moduleTranslation) {
-  llvm::Type *type = moduleTranslation.convertType(inputType);
-  if (auto pointerType =
-          llvm::dyn_cast<mlir::omp::PointerLikeType>(inputType)) {
-    if (auto eleType = pointerType.getElementType()) {
-      type = moduleTranslation.convertType(eleType);
-    }
-  }
-  return type;
-}
-
 void collectMapDataFromMapOperands(MapInfoData &mapData,
                                    llvm::SmallVectorImpl<Value> &mapOperands,
                                    LLVM::ModuleTranslation &moduleTranslation,
@@ -1793,10 +1778,9 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
         mapData.BasePointers.push_back(mapData.OriginalValue.back());
       }
 
-      mapData.BaseType.push_back(getLLVMIRType(mapOp.getVal()
-                                                   ? mapOp.getVal().getType()
-                                                   : mapOp.getVarType().value(),
-                                               moduleTranslation));
+      mapData.BaseType.push_back(moduleTranslation.convertType(
+          mapOp.getVal() ? mapOp.getVal().getType()
+                         : mapOp.getVarType().value()));
       mapData.Sizes.push_back(
           getSizeInBytes(dl,
                          mapOp.getVal() ? mapOp.getVal().getType()

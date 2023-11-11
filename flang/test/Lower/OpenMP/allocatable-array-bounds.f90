@@ -19,7 +19,7 @@
 !HOST: %[[CONSTANT_4:.*]] = arith.constant 5 : index
 !HOST: %[[UB_1:.*]] = arith.subi %[[CONSTANT_4]], %[[BOX_1]]#0 : index
 !HOST: %[[BOUNDS_1:.*]] = omp.bounds lower_bound(%[[LB_1]] : index) upper_bound(%[[UB_1]] : index) stride(%[[BOX_2]]#2 : index) start_idx(%[[BOX_1]]#0 : index) {stride_in_bytes = true}
-!HOST: %[[MAP_INFO_1:.*]] = omp.map_info var_ptr(%[[DECLARE_1]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS_1]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable = true, name = "sp_read(2:5)"}
+!HOST: %[[MAP_INFO_1:.*]] = omp.map_info var_ptr(%[[DECLARE_1]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS_1]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable, name = "sp_read(2:5)"}
     
 !HOST: %[[LOAD_3:.*]] = fir.load %[[DECLARE_2]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>
 !HOST: %[[LOAD_4:.*]] = fir.load %[[DECLARE_2]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>
@@ -32,7 +32,7 @@
 !HOST: %[[CONSTANT_8:.*]] = arith.constant 5 : index
 !HOST: %[[UB_2:.*]] = arith.subi %[[CONSTANT_8]], %[[BOX_3]]#0 : index
 !HOST: %[[BOUNDS_2:.*]] = omp.bounds lower_bound(%[[LB_2]] : index) upper_bound(%[[UB_2]] : index) stride(%[[BOX_4]]#2 : index) start_idx(%[[BOX_3]]#0 : index) {stride_in_bytes = true}
-!HOST: %[[MAP_INFO_2:.*]] = omp.map_info var_ptr(%11#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS_2]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable = true, name = "sp_write(2:5)"}
+!HOST: %[[MAP_INFO_2:.*]] = omp.map_info var_ptr(%11#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS_2]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable, name = "sp_write(2:5)"}
 subroutine read_write_section()
     integer, allocatable :: sp_read(:)
     integer, allocatable :: sp_write(:)
@@ -65,7 +65,7 @@ module assumed_allocatable_array_routines
 !HOST: %[[CONSTANT_4:.*]] = arith.constant 5 : index
 !HOST: %[[UB:.*]] = arith.subi %[[CONSTANT_4]], %[[BOX_1]]#0 : index
 !HOST: %[[BOUNDS:.*]] = omp.bounds lower_bound(%[[LB]] : index) upper_bound(%[[UB]] : index) stride(%[[BOX_2]]#2 : index) start_idx(%[[BOX_1]]#0 : index) {stride_in_bytes = true}
-!HOST: %[[MAP_INFO:.*]] = omp.map_info var_ptr(%[[DECLARE]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable = true, name = "arr_read_write(2:5)"}
+!HOST: %[[MAP_INFO:.*]] = omp.map_info var_ptr(%[[DECLARE]]#1 : !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>>, !fir.box<!fir.heap<!fir.array<?xi32>>>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS]]) -> !fir.ref<!fir.box<!fir.heap<!fir.array<?xi32>>>> {is_fortran_allocatable, name = "arr_read_write(2:5)"}
 subroutine assumed_shape_array(arr_read_write)
     integer, allocatable, intent(inout) :: arr_read_write(:)
 

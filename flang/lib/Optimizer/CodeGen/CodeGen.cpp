@@ -418,46 +418,6 @@ public:
 } // namespace
 
 namespace {
-// FIR Op specific conversion for MapInfoOp that overwrites the default OpenMP
-// Dialect lowering, this allows FIR specific lowering of types, required for
-// descriptors of allocatables currently.
-struct MapInfoOpConversion : public FIROpConversion<mlir::omp::MapInfoOp> {
-  using FIROpConversion::FIROpConversion;
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::omp::MapInfoOp curOp, OpAdaptor adaptor,
-                  mlir::ConversionPatternRewriter &rewriter) const override {
-    const mlir::TypeConverter *converter = getTypeConverter();
-
-    llvm::SmallVector<mlir::Type> resTypes;
-    if (failed(converter->convertTypes(curOp->getResultTypes(), resTypes)))
-      return mlir::failure();
-
-    // Copy attributes of the curOp except for the typeAttr which should
-    // be converted
-    llvm::SmallVector<mlir::NamedAttribute> newAttrs;
-    for (mlir::NamedAttribute attr : curOp->getAttrs()) {
-      if (auto typeAttr = mlir::dyn_cast<mlir::TypeAttr>(attr.getValue())) {
-        mlir::Type newAttr;
-        if (curOp.getIsFortranAllocatable()) {
-          newAttr = this->getBoxTypePair(typeAttr.getValue()).llvm;
-        } else {
-          newAttr = converter->convertType(typeAttr.getValue());
-        }
-        newAttrs.emplace_back(attr.getName(), mlir::TypeAttr::get(newAttr));
-      } else {
-        newAttrs.push_back(attr);
-      }
-    }
-
-    rewriter.replaceOpWithNewOp<mlir::omp::MapInfoOp>(
-        curOp, resTypes, adaptor.getOperands(), newAttrs);
-    return mlir::success();
-  }
-};
-} // namespace
-
-namespace {
 /// Lower `fir.address_of` operation to `llvm.address_of` operation.
 struct AddrOfOpConversion : public FIROpConversion<fir::AddrOfOp> {
   using FIROpConversion::FIROpConversion;
@@ -3837,6 +3797,15 @@ public:
     if (mlir::failed(runPipeline(mathConvertionPM, mod)))
       return signalPassFailure();
 
+    // HLFIR/FIR specific processing pass required for
+    // OpenMP dialect operations. Allows access to FIR
+    // machinary not accessible in the OpenMP dialect
+    // rewriters.
+    mlir::OpPassManager openmpConversionPM("builtin.module");
+    openmpConversionPM.addPass(fir::createOpenMPFIRConversionsToLLVMPass());
+    if (mlir::failed(runPipeline(openmpConversionPM, mod)))
+      return signalPassFailure();
+
     auto *context = getModule().getContext();
     fir::LLVMTypeConverter typeConverter{getModule(),
                                          options.applyTBAA || applyTBAA,
@@ -3868,11 +3837,6 @@ public:
                                                                   options);
     mlir::populateFuncToLLVMConversionPatterns(typeConverter, pattern);
     mlir::populateOpenMPToLLVMConversionPatterns(typeConverter, pattern);
-
-    // Insert OpenMP FIR specific conversion patterns that override OpenMP
-    // dialect default conversion patterns.
-    pattern.insert<MapInfoOpConversion>(typeConverter, options);
-
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, pattern);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           pattern);

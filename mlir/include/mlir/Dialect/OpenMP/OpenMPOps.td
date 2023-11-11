@@ -1153,7 +1153,7 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
                        OptionalAttr<UI64Attr>:$map_type,
                        OptionalAttr<VariableCaptureKindAttr>:$map_capture_type,
                        OptionalAttr<StrAttr>:$name,
-                       DefaultValuedAttr<BoolAttr, "false">:$is_fortran_allocatable);
+                       UnitAttr:$is_fortran_allocatable);
   let results = (outs AnyType:$omp_ptr);
 
   let description = [{

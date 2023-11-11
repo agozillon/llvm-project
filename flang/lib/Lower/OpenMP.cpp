@@ -54,9 +54,6 @@ getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject) {
                     Fortran::parser::Unwrap<Fortran::parser::ArrayElement>(
                         designator)) {
               sym = GetFirstName(arrayEle->base).symbol;
-            } else if (auto *structComp = Fortran::parser::Unwrap<
-                           Fortran::parser::StructureComponent>(designator)) {
-              sym = structComp->component.symbol;
             } else if (const Fortran::parser::Name *name =
                            Fortran::semantics::getDesignatorNameIfDataRef(
                                designator)) {
@@ -1736,8 +1733,7 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
       builder.getAttr<mlir::omp::VariableCaptureKindAttr>(mapCaptureType),
       builder.getStringAttr(name.str()));
 
-  if (isAllocatable)
-    op.setIsFortranAllocatableAttr(builder.getBoolAttr(isAllocatable));
+  op.setIsFortranAllocatable(isAllocatable);
 
   return op;
 }
