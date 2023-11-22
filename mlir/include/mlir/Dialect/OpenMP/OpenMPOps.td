@@ -1149,11 +1149,11 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
                        Optional<OpenMP_PointerLikeType>:$var_ptr,
                        OptionalAttr<TypeAttr>:$var_type,
                        Optional<OpenMP_PointerLikeType>:$var_ptr_ptr,
+                       Variadic<OpenMP_PointerLikeType>:$members,
                        Variadic<DataBoundsType>:$bounds, /* rank-0 to rank-{n-1} */
                        OptionalAttr<UI64Attr>:$map_type,
                        OptionalAttr<VariableCaptureKindAttr>:$map_capture_type,
-                       OptionalAttr<StrAttr>:$name,
-                       UnitAttr:$is_fortran_allocatable);
+                       OptionalAttr<StrAttr>:$name);
   let results = (outs AnyType:$omp_ptr);
 
   let description = [{
@@ -1190,19 +1190,20 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
     - `var_type`: The type of the variable/value to copy.
     - `var_ptr_ptr`: Used when the variable copied is a member of a class, structure
       or derived type and refers to the originating struct.
+    - `members`:  Used to indicate mapped child members for the current MapInfoOp, 
+       represented as other MapInfoOp's, utilised in cases where a parent structure 
+       type and members of the structure type are being mapped at the same time. 
+       For example: map(to: parent, parent->member, parent->member2[:10])  
     - `bounds`: Used when copying slices of array's, pointers or pointer members of
-      objects (e.g. derived types or classes), indicates the bounds to be copied
-      of the variable. When it's an array slice it is in rank order where rank 0
-      is the inner-most dimension.
+       objects (e.g. derived types or classes), indicates the bounds to be copied
+       of the variable. When it's an array slice it is in rank order where rank 0
+       is the inner-most dimension.
     - 'map_clauses': OpenMP map type for this map capture, for example: from, to and
-      always. It's a bitfield composed of the OpenMP runtime flags stored in
-      OpenMPOffloadMappingFlags.
+       always. It's a bitfield composed of the OpenMP runtime flags stored in
+       OpenMPOffloadMappingFlags.
     - 'map_capture_type': Capture type for the variable e.g. this, byref, byvalue, byvla
        this can affect how the variable is lowered.
     - `name`: Holds the name of variable as specified in user clause (including bounds).
-    -  'is_fortran_allocatable': Indicates if the var_ptr variable is a fortran allocatable 
-        type, e.g. a pointer or allocatable containing a descriptor mapping that wraps the 
-        data and contains further information on the mapped variable.
   }];
 
   let assemblyFormat = [{
@@ -1210,6 +1211,7 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
         `val` `(` $val `:` type($val) `)`
       | `var_ptr` `(` $var_ptr `:` type($var_ptr) `,` $var_type `)`
       | `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
+      | `members` `(` $members `:` type($members) `)`
       | `map_clauses` `(` custom<MapClause>($map_type) `)`
       | `capture` `(` custom<CaptureType>($map_capture_type) `)`
       | `bounds` `(` $bounds `)`

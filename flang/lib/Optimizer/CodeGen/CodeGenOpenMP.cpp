@@ -37,17 +37,32 @@ public:
 
   inline mlir::ModuleOp getModule() { return getOperation(); }
 
+  // possible to make overloads for the FIR types so they either remap all map
+  // operands that are used or don't do a huge amount of alloca spawning?
+
   void runOnOperation() override final {
     fir::LLVMTypeConverter typeConverter{getModule(), /*applyTBAA*/ false,
                                          /*forceUnifiedTBAATree*/ false};
     mlir::IRRewriter rewriter(getModule()->getContext());
+    getModule().dump();
     getModule().walk([&](mlir::Operation *op) {
       // FIR Op specific conversion for MapInfoOp's containing BoxTypes that are
       // descriptors this allows FIR specific lowering of types, required for
       // descriptors of allocatables currently.
       if (auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(op)) {
-        if (mapInfoOp.getIsFortranAllocatable() &&
-            mapInfoOp.getVarType().has_value()) {
+        if (mapInfoOp.getVarType().has_value() &&
+            (fir::isPointerType(mapInfoOp.getVarType().value()) ||
+             fir::isAllocatableType(mapInfoOp.getVarType().value()) ||
+             fir::isAssumedShape(mapInfoOp.getVarType().value()))) {
+
+          llvm::errs() << "printing in codegen \n";
+          mapInfoOp.getVarPtr().dump();
+
+          for (auto member : mapInfoOp.getMembers()) {
+            member.dump();
+          }
+
+          llvm::errs() << "printing at end of codegen \n";
           mapInfoOp.setVarType(typeConverter.convertBoxTypeAsStruct(
               mlir::cast<fir::BaseBoxType>(mapInfoOp.getVarType().value())));
         }

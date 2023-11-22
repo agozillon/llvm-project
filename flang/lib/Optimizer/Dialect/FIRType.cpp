@@ -1266,4 +1266,7 @@ void FIROpsDialect::registerTypes() {
       OpenMPPointerLikeModel<fir::LLVMPointerType>>(*getContext());
   fir::LLVMPointerType::attachInterface<
       OpenACCPointerLikeModel<fir::LLVMPointerType>>(*getContext());
+
+  fir::BoxType::attachInterface<OpenMPPointerLikeModel<fir::BoxType>>(
+      *getContext());
 }

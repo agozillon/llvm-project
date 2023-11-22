@@ -3882,6 +3882,10 @@ public:
       signalPassFailure();
     }
 
+    llvm::errs() << "module dump after conv S \n";
+    getModule().dump();
+    llvm::errs() << "module dump after conv E \n";
+
     // Run pass to add comdats to functions that have weak linkage on relevant platforms
     if (fir::getTargetTriple(mod).supportsCOMDAT()) {
       mlir::OpPassManager comdatPM("builtin.module");
