@@ -19,6 +19,7 @@
 namespace fir {
 
 struct NameUniquer;
+class LLVMTypeConverter;
 
 #define GEN_PASS_DECL_FIRTOLLVMLOWERING
 #define GEN_PASS_DECL_CODEGENREWRITE
@@ -84,7 +85,9 @@ std::unique_ptr<mlir::Pass> createBoxedProcedurePass(bool useThunks);
 /// utilised in cases where the default OpenMP dialect handling does not cover
 /// all cases.
 std::unique_ptr<mlir::Pass> createOpenMPFIRConversionsToLLVMPass();
-
+void populateOpenMPFIRToLLVMConversionPatterns(LLVMTypeConverter &converter,
+                                               mlir::RewritePatternSet &patterns);
+    
 // declarative passes
 #define GEN_PASS_REGISTRATION
 #include "flang/Optimizer/CodeGen/CGPasses.h.inc"

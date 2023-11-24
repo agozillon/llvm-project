@@ -20,6 +20,7 @@
 #include "flang/Lower/StatementContext.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
+#include "flang/Optimizer/Builder/MutableBox.h"
 #include "flang/Optimizer/Builder/Todo.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "flang/Parser/dump-parse-tree.h"
@@ -1707,18 +1708,18 @@ bool ClauseProcessor::processLink(
 
 static mlir::omp::MapInfoOp
 createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
-                mlir::Value baseAddr, std::stringstream &name,
-                mlir::SmallVector<mlir::Value> bounds,
+                mlir::Value baseAddr, mlir::Value varPtrPtr,
+                std::stringstream &name, mlir::SmallVector<mlir::Value> bounds,
                 mlir::SmallVector<mlir::Value> members, uint64_t mapType,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool isVal = false) {
-  mlir::Value val, varPtr, varPtrPtr;
+  mlir::Value val, varPtr;
   mlir::TypeAttr varType;
 
-  if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
-    baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
-    retTy = baseAddr.getType();
-  }
+  // if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
+  //   baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
+  //   retTy = baseAddr.getType();
+  // }
 
   if (isVal)
     val = baseAddr;
@@ -1759,23 +1760,100 @@ static void processMapForDescriptorType(
 
   // NOTE: BaseAddr without the default load inside of mapInfoOp will get the
   // alloca that's generated for the descriptor..
-  auto dataBaseAddr = createMapInfoOp(
-      firOpBuilder, clauseLocation, baseAddr, asFortran, bounds, {},
-      static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-          mapTypeBits),
-      mlir::omp::VariableCaptureKind::ByRef, baseAddr.getType());
 
-  mapOperands.push_back(dataBaseAddr);
-  if (mapSymTypes)
-    mapSymTypes->push_back(dataBaseAddr.getType());
-  if (mapSymLocs)
-    mapSymLocs->push_back(dataBaseAddr.getLoc());
+  // if (auto loadOp = mlir::dyn_cast_or_null<fir::LoadOp>(
+  //         baseAddr.getDefiningOp())) {
+  //   if (fir::isAllocatableType(loadOp.getType()) ||
+  //       fir::isPointerType(loadOp.getType()))
+  //     baseAddr = builder.create<fir::BoxAddrOp>(operandLocation,
+  //                                               baseAddr);
+  // }
+
+  // baseAddr.dump();
+  // fir::ExtendedValue &box =
+
+  // auto box =
+  // converter.getSymbolExtendedValue(*getOmpObjectSymbol(ompObject)); auto
+  // addrtest = box.match(
+  //     [&](const fir::BoxValue &x) -> mlir::Value {
+  //       llvm::errs() << "box? \n";
+  //       return x.getAddr();
+  //     },
+  //     [&](const fir::MutableBoxValue &x) -> mlir::Value {
+  //       llvm::errs() << "Mutable box? \n";
+  //       auto v = fir::factory::genMutableBoxRead(firOpBuilder,
+  //       clauseLocation,
+  //                                                x, x.isPolymorphic());
+  //       // v.dump();
+  //       // v.getUnboxed()->getDefiningOp()->dump();
+  //       return v.match(
+  //           [&](const fir::ArrayBoxValue &x) { return x.getAddr(); },
+  //           [&](const fir::PolymorphicValue &x) { return x.getAddr(); },
+  //           [&](const fir::BoxValue &x) { return x.getAddr(); },
+  //           [&](const auto &) -> mlir::Value {
+  //             fir::emitFatalError(clauseLocation, "incorrect box entity");
+  //           });
+  //       // return ;
+  //     },
+  //     [&](const auto &) -> mlir::Value {
+  //       fir::emitFatalError(clauseLocation, "incorrect box entity");
+  //     });
+  // addrtest.dump();
+
+  // // if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
+  // auto test = firOpBuilder.create<fir::BoxAddrOp>(clauseLocation, baseAddr);
+  // test.dump();
+  // auto test2 = firOpBuilder.create<fir::LoadOp>(clauseLocation, test);
+  // test2.dump();
+
+  // mlir::Type i8Ptr = firOpBuilder.getRefType(baseAddr.getType());
+
+  // mlir::Value offs = firOpBuilder.createIntegerConstant(
+  //     clauseLocation, firOpBuilder.getIndexType(), 0);
+  // mlir::Value varAddr = firOpBuilder.create<fir::CoordinateOp>(
+  //     clauseLocation, i8Ptr, baseAddr, mlir::ValueRange{offs});
+
+  // varAddr.dump();
+
+  // mlir::Value symValue = firOpBuilder.create<fir::AddrOfOp>(clauseLocation,
+  // test.resultType(), global.getSymbol());
+  // }
+
+  // List of possible useful ops:
+  // fir.coordinate_of
+
+  // The genMutableBoxRead is a very interesting function that may be quite
+  // helpful
+  //
+  // Look into both the gatherDataOperandAndBounds and the CodeGen lowering for
+  // creating the addendum/descriptor stuff for FIR->LLVMIR
+  // auto boxAddrOp =
+  //     firOpBuilder.create<fir::BoxAddrOp>(clauseLocation, baseAddr);
+
+  // auto dataBaseAddr = createMapInfoOp(
+  //     firOpBuilder, clauseLocation, boxAddrOp, mlir::Value{}, asFortran,
+  //     bounds,
+  //     {},
+  //     static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+  //         mapTypeBits),
+  //     mlir::omp::VariableCaptureKind::ByRef, boxAddrOp.getType());
+
+  // mapOperands.push_back(dataBaseAddr);
+  // if (mapSymTypes)
+  //   mapSymTypes->push_back(dataBaseAddr.getType());
+  // if (mapSymLocs)
+  //   mapSymLocs->push_back(dataBaseAddr.getLoc());
 
   // TODO: Handle addendum mapping via fir::hasaddendum check
+  // this segment of code in CodeGen may be useful:
+  //   if (fir::boxHasAddendum(inputBoxTy))
+  // typeDesc =
+  //     this->loadTypeDescAddress(loc, inputBoxTyPair, loweredBox, rewriter);
 
   mapOperands.push_back(createMapInfoOp(
-      firOpBuilder, clauseLocation, orignalSymbol, asFortran, {},
-      {dataBaseAddr},
+      firOpBuilder, clauseLocation, orignalSymbol,
+      /*firOpBuilder.create<fir::BoxAddrOp>(clauseLocation,*/ baseAddr /*)*/,
+      asFortran, bounds, {},
       static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
           mapTypeBits),
       mlir::omp::VariableCaptureKind::ByRef, orignalSymbol.getType()));
@@ -1869,7 +1947,8 @@ bool ClauseProcessor::processMap(
             // optimisation passes may alter this to ByCopy or other capture
             // types to optimise
             mlir::Value mapOp = createMapInfoOp(
-                firOpBuilder, clauseLocation, baseAddr, asFortran, bounds, {},
+                firOpBuilder, clauseLocation, baseAddr, mlir::Value{},
+                asFortran, bounds, {},
                 static_cast<std::underlying_type_t<
                     llvm::omp::OpenMPOffloadMappingFlags>>(mapTypeBits),
                 mlir::omp::VariableCaptureKind::ByRef, baseAddr.getType());
@@ -2573,17 +2652,17 @@ static void genBodyOfTargetOp(
 
   // Bind the symbols to their corresponding block arguments.
   for (const Fortran::semantics::Symbol *sym : mapSymbols) {
-    mlir::Value symAddr = converter.getSymbolAddress(*sym);
+    // mlir::Value symAddr = converter.getSymbolAddress(*sym);
     // If it's a type that lowers to a descriptor then it currently
     // comes alongside one other explicit mapping for the data
     // pointer held by the descriptor which holds no symbol, but
     // has a block and map argument in this case we offset by
     // one to avoid this implicit map.
-    if (fir::isPointerType(symAddr.getType()) ||
-        fir::isAllocatableType(symAddr.getType()) ||
-        fir::isAssumedShape(symAddr.getType())) {
-      argIndex++;
-    }
+    // if (fir::isPointerType(symAddr.getType()) ||
+    //     fir::isAllocatableType(symAddr.getType()) ||
+    //     fir::isAssumedShape(symAddr.getType())) {
+    //   argIndex++;
+    // }
 
     const mlir::BlockArgument &arg = region.getArgument(argIndex);
     fir::ExtendedValue extVal = converter.getSymbolExtendedValue(*sym);
@@ -2734,8 +2813,8 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
         }
 
         mlir::Value mapOp = createMapInfoOp(
-            converter.getFirOpBuilder(), baseOp.getLoc(), baseOp, name, bounds,
-            {},
+            converter.getFirOpBuilder(), baseOp.getLoc(), baseOp, mlir::Value{},
+            name, bounds, {},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 mapFlag),
@@ -2760,7 +2839,8 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
       std::stringstream name;
 
       mlir::Value mapOp = createMapInfoOp(
-          converter.getFirOpBuilder(), val.getLoc(), val, name, bounds, {},
+          converter.getFirOpBuilder(), val.getLoc(), val, mlir::Value{}, name,
+          bounds, {},
           static_cast<
               std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
               llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT),

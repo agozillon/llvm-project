@@ -29,6 +29,90 @@ using namespace fir;
 #include "flang/Optimizer/CodeGen/TypeConverter.h"
 
 namespace {
+/// A pattern that converts the region arguments in a single-region OpenMP
+/// operation to the LLVM dialect. The body of the region is not modified and is
+/// expected to either be processed by the conversion infrastructure or already
+/// contain ops compatible with LLVM dialect types.
+template <typename OpType>
+class OpenMPFIROpConversion : public mlir::ConvertOpToLLVMPattern<OpType> {
+public:
+  explicit OpenMPFIROpConversion(const fir::LLVMTypeConverter &lowering)
+      : mlir::ConvertOpToLLVMPattern<OpType>(lowering) {}
+
+  const fir::LLVMTypeConverter &lowerTy() const {
+    return *static_cast<const fir::LLVMTypeConverter *>(
+        this->getTypeConverter());
+  }
+};
+
+// FIR Op specific conversion for MapInfoOp that overwrites the default OpenMP
+// Dialect lowering, this allows FIR specific lowering of types, required for
+// descriptors of allocatables currently.
+struct MapInfoOpConversion
+    : public OpenMPFIROpConversion<mlir::omp::MapInfoOp> {
+  using OpenMPFIROpConversion::OpenMPFIROpConversion;
+
+  void generateImplicitDescriptorMaps(
+      mlir::Value varPtrPtr, mlir::ValueRange boundsOps, mlir::Type boxTy,
+      mlir::Type llvmBoxTy, mlir::ConversionPatternRewriter &rewriter) const {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::omp::MapInfoOp curOp, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    const mlir::TypeConverter *converter = getTypeConverter();
+
+    llvm::errs() << "executing match and rewrite for MapInfoOpConversion \n";
+    llvm::SmallVector<mlir::Type> resTypes;
+    if (failed(converter->convertTypes(curOp->getResultTypes(), resTypes)))
+      return mlir::failure();
+
+    curOp.dump();
+
+    mlir::Value a = adaptor.getOperands()[0];
+    a.dump();
+
+    if (adaptor.getVarPtrPtr()) {
+      adaptor.getVarPtrPtr().dump();
+    }
+    // auto loc = boxaddr.getLoc();
+    // if (auto argty = boxaddr.getVal().getType().dyn_cast<fir::BaseBoxType>())
+    // {
+    //   TypePair boxTyPair = getBoxTypePair(argty);
+    //   rewriter.replaceOp(boxaddr,
+    //                      getBaseAddrFromBox(loc, boxTyPair, a, rewriter));
+    // } else {
+    // }
+    // Copy attributes of the curOp except for the typeAttr which should
+    // be converted
+    llvm::SmallVector<mlir::NamedAttribute> newAttrs;
+    for (mlir::NamedAttribute attr : curOp->getAttrs()) {
+      if (auto typeAttr = mlir::dyn_cast<mlir::TypeAttr>(attr.getValue())) {
+        mlir::Type newAttr;
+        if (fir::isPointerType(typeAttr.getValue()) ||
+            fir::isAllocatableType(typeAttr.getValue()) ||
+            fir::isAssumedShape(typeAttr.getValue())) {
+          newAttr = lowerTy().convertBoxTypeAsStruct(
+              mlir::cast<fir::BaseBoxType>(typeAttr.getValue()));
+          generateImplicitDescriptorMaps(
+              adaptor.getVarPtrPtr(), adaptor.getBounds(), typeAttr.getValue(),
+              newAttr, rewriter);
+        } else {
+          newAttr = converter->convertType(typeAttr.getValue());
+        }
+        newAttrs.emplace_back(attr.getName(), mlir::TypeAttr::get(newAttr));
+      } else {
+        newAttrs.push_back(attr);
+      }
+    }
+    // TODO: Remove the bounds from the original map
+    rewriter.replaceOpWithNewOp<mlir::omp::MapInfoOp>(
+        curOp, resTypes, adaptor.getOperands(), newAttrs);
+    return mlir::success();
+  }
+};
+} // namespace
+
+namespace {
 class OpenMPFIRConversionsToLLVM
     : public fir::impl::OpenMPFIRConversionsToLLVMBase<
           OpenMPFIRConversionsToLLVM> {
@@ -71,6 +155,12 @@ public:
   };
 };
 } // namespace
+
+void fir::populateOpenMPFIRToLLVMConversionPatterns(
+    LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
+
+  patterns.add<MapInfoOpConversion>(converter);
+}
 
 std::unique_ptr<mlir::Pass> fir::createOpenMPFIRConversionsToLLVMPass() {
   return std::make_unique<OpenMPFIRConversionsToLLVM>();
