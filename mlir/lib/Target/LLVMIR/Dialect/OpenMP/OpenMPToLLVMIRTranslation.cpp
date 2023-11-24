@@ -1892,6 +1892,14 @@ static void processMapWithMembersOf(
 
     combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
 
+    // TODO:
+    //  1) Add Bounds calculations back in for new method, utilsing the bounds
+    //   operations this time
+    // 4) Clean up OpenMPToLLVMIRTranslation
+    // 5) Rebase on Akash's changes upstream
+    // 6) Push to PR if Slava hasn't said it's a bad idea
+    // 7) finish year end review
+
     if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
             memberClause.getBounds()[0].getDefiningOp())) {
       // TODO: Support dimensions > 1 accesses
@@ -1936,8 +1944,6 @@ static void generateAllocatablesMapInfo(
     uint64_t mapDataIndex, bool isTargetParams) {
   auto mapClauseInfo =
       mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
-  // llvm::errs() << "trying to map below: \n";
-  // mapClauseInfo->dump();
 
   ////////// First Descriptor Structure Segment //////////
   combinedInfo.Types.emplace_back(
@@ -2079,16 +2085,15 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
     combinedInfo.Names.clear();
   };
 
-  llvm::errs() << "5 \n";
-
   llvm::SmallVector<size_t, 4> primaryMapIdx;
   for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
     primaryMapIdx.push_back(i);
   }
 
   // TODO: Handle nested MembersOf, currently only cares about the first level
-  // of nesting, but a slight refactoring of mapInfoData to hold nestings or
-  // MembersOf may be a better approach to simplify things.
+  // of nesting (all that was relevant for Fortran descriptors), but a slight
+  // refactoring of mapInfoData to hold nestings or membersOf may be a better
+  // approach to simplify things.
   for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
     auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
     for (auto member : mapInfoOp.getMembers()) {
@@ -2100,16 +2105,14 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
       }
     }
   }
-  llvm::errs() << "map process idx sz: " << primaryMapIdx.size() << "\n";
 
   // We operate under the assumption that all vectors that are
   // required in MapInfoData are of equal lengths (either filled with
   // default constructed data or appropiate information) so we can
   // utilise the size from any component of MapInfoData, if we can't
   // something is missing from the initial MapInfoData construction.
-  for (size_t i = 0; i < primaryMapIdx.size(); ++i) {
-    auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-        mapData.MapClause[primaryMapIdx[i]]);
+  for (unsigned long i : primaryMapIdx) {
+    auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
 
     bool isImplicit =
         mapInfoOp.getMapType().value() &
@@ -2125,16 +2128,15 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
     // enter/exit handling
     if (!isImplicit && !mapInfoOp.getMembers().empty()) {
       processMapWithMembersOf(moduleTranslation, builder, *ompBuilder, dl,
-                              combinedInfo, mapData, primaryMapIdx[i],
-                              isTargetParams);
+                              combinedInfo, mapData, i, isTargetParams);
       continue;
     }
 
     // Declare Target Mappings are excluded from being marked as
     // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
     // marked with OMP_MAP_PTR_AND_OBJ instead.
-    auto mapFlag = mapData.Types[primaryMapIdx[i]];
-    if (mapData.IsDeclareTarget[primaryMapIdx[i]])
+    auto mapFlag = mapData.Types[i];
+    if (mapData.IsDeclareTarget[i])
       mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
     else if (isTargetParams)
       mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
@@ -2145,14 +2147,12 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
           mapInfoOp.getVarType()->isa<LLVM::LLVMPointerType>()))
       mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
 
-    combinedInfo.BasePointers.emplace_back(
-        mapData.BasePointers[primaryMapIdx[i]]);
-    combinedInfo.Pointers.emplace_back(mapData.Pointers[primaryMapIdx[i]]);
-    combinedInfo.DevicePointers.emplace_back(
-        mapData.DevicePointers[primaryMapIdx[i]]);
-    combinedInfo.Names.emplace_back(mapData.Names[primaryMapIdx[i]]);
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[i]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[i]);
+    combinedInfo.DevicePointers.emplace_back(mapData.DevicePointers[i]);
+    combinedInfo.Names.emplace_back(mapData.Names[i]);
     combinedInfo.Types.emplace_back(mapFlag);
-    combinedInfo.Sizes.emplace_back(mapData.Sizes[primaryMapIdx[i]]);
+    combinedInfo.Sizes.emplace_back(mapData.Sizes[i]);
   }
 
   auto findMapInfo = [&combinedInfo](llvm::Value *val, unsigned &index) {
@@ -2272,6 +2272,33 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
   MapInfoData mapData;
   collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, DL,
                                 builder);
+
+  // In the case of Fortran descriptors some members get added implicitly
+  // after the target region has been generated during CodeGen lowering
+  // which prevents them from being added trivially to the target region
+  // as map arguments, we must handle this case here by generating
+  // MapInfoData for them.
+  SmallVector<Value> mapMemberOperands;
+  for (size_t i = 0; i < mapOperands.size(); ++i) {
+    auto mapInfoOp =
+        mlir::dyn_cast<mlir::omp::MapInfoOp>(mapOperands[i].getDefiningOp());
+    for (auto members : mapInfoOp.getMembers()) {
+      if (!std::any_of(mapOperands.begin(), mapOperands.end(),
+                       [&](auto mapOp) {
+                         return mapOp.getDefiningOp() ==
+                                members.getDefiningOp();
+                       }) &&
+          !std::any_of(mapMemberOperands.begin(), mapMemberOperands.end(),
+                       [&](auto mapOp) {
+                         return mapOp.getDefiningOp() ==
+                                members.getDefiningOp();
+                       }))
+        mapMemberOperands.push_back(members);
+    }
+  }
+
+  collectMapDataFromMapOperands(mapData, mapMemberOperands, moduleTranslation,
+                                DL, builder);
 
   // Fill up the arrays with all the mapped variables.
   llvm::OpenMPIRBuilder::MapInfosTy combinedInfo;
@@ -2721,6 +2748,10 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   llvm::OpenMPIRBuilder::InsertPointTy allocaIP =
       findAllocaInsertPoint(builder, moduleTranslation);
 
+  MapInfoData mapData;
+  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl,
+                                builder);
+
   // In the case of Fortran descriptors some members get added implicitly
   // after the target region has been generated during CodeGen lowering
   // which prevents them from being added trivially to the target region
@@ -2744,14 +2775,10 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
         mapMemberOperands.push_back(members);
     }
   }
-  llvm::errs() << "here 1 \n";
-  MapInfoData mapData;
-  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl,
-                                builder);
-  llvm::errs() << "here 2 \n";
+
   collectMapDataFromMapOperands(mapData, mapMemberOperands, moduleTranslation,
                                 dl, builder);
-  llvm::errs() << "here 3 \n";
+
   // We wish to modify some of the methods in which kernel arguments are
   // passed based on their capture type by the target region, this can
   // involve generating new loads and stores, which changes the
@@ -2765,7 +2792,7 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   // pass thee pointer byref as both basePointer and pointer.
   if (!moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
     createAlteredByCaptureMap(mapData, moduleTranslation, builder);
-  llvm::errs() << "here 4 \n";
+
   llvm::OpenMPIRBuilder::MapInfosTy combinedInfos;
   auto genMapInfoCB = [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP)
       -> llvm::OpenMPIRBuilder::MapInfosTy & {
@@ -2796,23 +2823,16 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   };
 
   llvm::SmallVector<llvm::Value *, 4> kernelInput;
-  llvm::errs() << "mapClause Sz: " << mapData.MapClause.size() << "\n";
-  llvm::errs() << "IsDeclareTarget Sz: " << mapData.IsDeclareTarget.size()
-               << "\n";
-  llvm::errs() << "OriginalValue Sz: " << mapData.OriginalValue.size() << "\n";
   for (size_t i = 0; i < mapOperands.size(); ++i) {
     // declare target arguments are not passed to kernels as arguments
     if (!mapData.IsDeclareTarget[i])
       kernelInput.push_back(mapData.OriginalValue[i]);
   }
 
-  llvm::errs() << "here 5 \n";
-
   builder.restoreIP(moduleTranslation.getOpenMPBuilder()->createTarget(
       ompLoc, allocaIP, builder.saveIP(), entryInfo, defaultValTeams,
       defaultValThreads, kernelInput, genMapInfoCB, bodyCB, argAccessorCB));
 
-  llvm::errs() << "here 6 \n";
   // Remap access operations to declare target reference pointers for the
   // device, essentially generating extra loadop's as necessary
   if (moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
