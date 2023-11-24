@@ -13,13 +13,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-
-namespace fir {
-#define GEN_PASS_DEF_OPENMPFIRCONVERSIONSTOLLVM
-#include "flang/Optimizer/CodeGen/CGPasses.h.inc"
-} // namespace fir
 
 using namespace fir;
 
@@ -52,39 +46,53 @@ struct MapInfoOpConversion
     : public OpenMPFIROpConversion<mlir::omp::MapInfoOp> {
   using OpenMPFIROpConversion::OpenMPFIROpConversion;
 
-  void generateImplicitDescriptorMaps(
-      mlir::Value varPtrPtr, mlir::ValueRange boundsOps, mlir::Type boxTy,
-      mlir::Type llvmBoxTy, mlir::ConversionPatternRewriter &rewriter) const {}
+  mlir::omp::MapInfoOp generateImplicitDescriptorMaps(
+      mlir::omp::MapInfoOp curOp, mlir::Value firBox, mlir::Value llvmBox,
+      mlir::ValueRange boundsOps, mlir::Type firBoxTys,
+      mlir::TypeAttr llvmBoxTy,
+      mlir::ConversionPatternRewriter &rewriter) const {
+    auto ptTy =
+        mlir::LLVM::LLVMPointerType::get(llvmBoxTy.getValue().getContext());
+    auto baseAddr = rewriter.create<mlir::LLVM::GEPOp>(
+        firBox.getLoc(), ptTy, llvmBoxTy.getValue(), llvmBox,
+        llvm::ArrayRef<mlir::LLVM::GEPArg>{0, kAddrPosInBox});
+
+    // We require the underlying type of the base addr/pointer inside of the
+    // descriptor for later lowering (a bit of an issue as we've deprecated
+    // typed pointers in LLVM/MLIR)
+    mlir::Type eleTy;
+    if (auto boxTy = mlir::dyn_cast<fir::BaseBoxType>(firBoxTys)) {
+      eleTy = boxTy.getEleTy();
+      if (auto heapTy = mlir::dyn_cast<fir::HeapType>(boxTy.getEleTy()))
+        eleTy = heapTy.getEleTy();
+      eleTy = getTypeConverter()->convertType(eleTy);
+    }
+
+    auto descriptorBaseAddr = rewriter.create<mlir::omp::MapInfoOp>(
+        curOp->getLoc(), baseAddr.getType(), mlir::Value{}, baseAddr,
+        mlir::TypeAttr::get(eleTy), mlir::Value{},
+        mlir::SmallVector<mlir::Value>{}, curOp.getBounds(),
+        curOp.getMapTypeAttr(), curOp.getMapCaptureTypeAttr(),
+        curOp.getNameAttr());
+
+    return rewriter.create<mlir::omp::MapInfoOp>(
+        curOp->getLoc(), curOp.getVarPtrPtr().getType(), curOp.getVal(),
+        curOp.getVarPtrPtr(), llvmBoxTy, mlir::Value{},
+        mlir::SmallVector<mlir::Value>{descriptorBaseAddr},
+        mlir::SmallVector<mlir::Value>{}, curOp.getMapTypeAttr(),
+        curOp.getMapCaptureTypeAttr(), curOp.getNameAttr());
+  }
 
   mlir::LogicalResult
   matchAndRewrite(mlir::omp::MapInfoOp curOp, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
     const mlir::TypeConverter *converter = getTypeConverter();
-
-    llvm::errs() << "executing match and rewrite for MapInfoOpConversion \n";
     llvm::SmallVector<mlir::Type> resTypes;
     if (failed(converter->convertTypes(curOp->getResultTypes(), resTypes)))
       return mlir::failure();
 
-    curOp.dump();
-
-    mlir::Value a = adaptor.getOperands()[0];
-    a.dump();
-
-    if (adaptor.getVarPtrPtr()) {
-      adaptor.getVarPtrPtr().dump();
-    }
-    // auto loc = boxaddr.getLoc();
-    // if (auto argty = boxaddr.getVal().getType().dyn_cast<fir::BaseBoxType>())
-    // {
-    //   TypePair boxTyPair = getBoxTypePair(argty);
-    //   rewriter.replaceOp(boxaddr,
-    //                      getBaseAddrFromBox(loc, boxTyPair, a, rewriter));
-    // } else {
-    // }
-    // Copy attributes of the curOp except for the typeAttr which should
-    // be converted
     llvm::SmallVector<mlir::NamedAttribute> newAttrs;
+    mlir::omp::MapInfoOp newOp;
     for (mlir::NamedAttribute attr : curOp->getAttrs()) {
       if (auto typeAttr = mlir::dyn_cast<mlir::TypeAttr>(attr.getValue())) {
         mlir::Type newAttr;
@@ -93,9 +101,10 @@ struct MapInfoOpConversion
             fir::isAssumedShape(typeAttr.getValue())) {
           newAttr = lowerTy().convertBoxTypeAsStruct(
               mlir::cast<fir::BaseBoxType>(typeAttr.getValue()));
-          generateImplicitDescriptorMaps(
-              adaptor.getVarPtrPtr(), adaptor.getBounds(), typeAttr.getValue(),
-              newAttr, rewriter);
+          mlir::TypeAttr boxAttr = mlir::TypeAttr::get(newAttr);
+          newOp = generateImplicitDescriptorMaps(
+              curOp, curOp.getVarPtrPtr(), adaptor.getVarPtrPtr(),
+              adaptor.getBounds(), typeAttr.getValue(), boxAttr, rewriter);
         } else {
           newAttr = converter->convertType(typeAttr.getValue());
         }
@@ -104,55 +113,15 @@ struct MapInfoOpConversion
         newAttrs.push_back(attr);
       }
     }
-    // TODO: Remove the bounds from the original map
-    rewriter.replaceOpWithNewOp<mlir::omp::MapInfoOp>(
-        curOp, resTypes, adaptor.getOperands(), newAttrs);
+
+    if (newOp)
+      rewriter.replaceOp(curOp, newOp);
+    else
+      rewriter.replaceOpWithNewOp<mlir::omp::MapInfoOp>(
+          curOp, resTypes, adaptor.getOperands(), newAttrs);
+
     return mlir::success();
   }
-};
-} // namespace
-
-namespace {
-class OpenMPFIRConversionsToLLVM
-    : public fir::impl::OpenMPFIRConversionsToLLVMBase<
-          OpenMPFIRConversionsToLLVM> {
-public:
-  OpenMPFIRConversionsToLLVM() {}
-
-  inline mlir::ModuleOp getModule() { return getOperation(); }
-
-  // possible to make overloads for the FIR types so they either remap all map
-  // operands that are used or don't do a huge amount of alloca spawning?
-
-  void runOnOperation() override final {
-    fir::LLVMTypeConverter typeConverter{getModule(), /*applyTBAA*/ false,
-                                         /*forceUnifiedTBAATree*/ false};
-    mlir::IRRewriter rewriter(getModule()->getContext());
-    getModule().dump();
-    getModule().walk([&](mlir::Operation *op) {
-      // FIR Op specific conversion for MapInfoOp's containing BoxTypes that are
-      // descriptors this allows FIR specific lowering of types, required for
-      // descriptors of allocatables currently.
-      if (auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(op)) {
-        if (mapInfoOp.getVarType().has_value() &&
-            (fir::isPointerType(mapInfoOp.getVarType().value()) ||
-             fir::isAllocatableType(mapInfoOp.getVarType().value()) ||
-             fir::isAssumedShape(mapInfoOp.getVarType().value()))) {
-
-          llvm::errs() << "printing in codegen \n";
-          mapInfoOp.getVarPtr().dump();
-
-          for (auto member : mapInfoOp.getMembers()) {
-            member.dump();
-          }
-
-          llvm::errs() << "printing at end of codegen \n";
-          mapInfoOp.setVarType(typeConverter.convertBoxTypeAsStruct(
-              mlir::cast<fir::BaseBoxType>(mapInfoOp.getVarType().value())));
-        }
-      }
-    });
-  };
 };
 } // namespace
 
@@ -160,8 +129,4 @@ void fir::populateOpenMPFIRToLLVMConversionPatterns(
     LLVMTypeConverter &converter, mlir::RewritePatternSet &patterns) {
 
   patterns.add<MapInfoOpConversion>(converter);
-}
-
-std::unique_ptr<mlir::Pass> fir::createOpenMPFIRConversionsToLLVMPass() {
-  return std::make_unique<OpenMPFIRConversionsToLLVM>();
 }
