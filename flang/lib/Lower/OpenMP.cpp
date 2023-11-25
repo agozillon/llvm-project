@@ -2718,7 +2718,7 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
           static_cast<
               std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
               llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT),
-          mlir::omp::VariableCaptureKind::ByCopy, val.getType(), false);
+          mlir::omp::VariableCaptureKind::ByCopy, val.getType(), true);
       mapOperands.push_back(mapOp);
     }
   };

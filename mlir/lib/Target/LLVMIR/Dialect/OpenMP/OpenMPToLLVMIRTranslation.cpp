@@ -1683,9 +1683,8 @@ llvm::Value *getSizeInBytes(DataLayout &dl, const mlir::Type &type,
   // utilising getTypeSizeInBits instead of getTypeSize as getTypeSize gives
   // the size in inconsistent byte or bit format.
   uint64_t underlyingTypeSzInBits = dl.getTypeSizeInBits(type);
-  if (auto arrTy = llvm::dyn_cast_if_present<LLVM::LLVMArrayType>(type)) {
+  if (auto arrTy = llvm::dyn_cast_if_present<LLVM::LLVMArrayType>(type))
     underlyingTypeSzInBits = getArrayElementSizeInBits(arrTy, dl);
-  }
 
   if (auto memberClause =
           mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(clauseOp)) {
@@ -1712,24 +1711,6 @@ llvm::Value *getSizeInBytes(DataLayout &dl, const mlir::Type &type,
         }
       }
 
-      // The size in bytes x number of elements, for allocatables, the
-      // underlying element type is stored inside of the descriptor, we
-      // can retrieve and use it directly here. However, it may also be
-      // possible to use the BoundsOp's getStride, which points to the
-      // same field, however, unsure if the stride will change based
-      // on a user specified stride, whereas, the element size
-      // of the descriptor should never change and can be used to
-      // calculate other things.
-      // if (memberClause.getIsFortranAllocatable()) {
-      //   llvm::Value *memberEleByteSize = builder.CreateLoad(
-      //       builder.getInt64Ty(),
-      //       builder.CreateGEP(baseType, basePointer,
-      //                         std::vector<llvm::Value *>{builder.getInt64(0),
-      //                                                    builder.getInt32(1)},
-      //                         "element_size"));
-      //   return builder.CreateMul(elementCount, memberEleByteSize);
-      // }
-
       // The size in bytes x number of elements, the sizeInBytes stored is
       // the underyling types size, e.g. if ptr<i32>, it'll be the i32's
       // size, so we do some on the fly runtime math to get the size in
@@ -1738,18 +1719,6 @@ llvm::Value *getSizeInBytes(DataLayout &dl, const mlir::Type &type,
       return builder.CreateMul(elementCount,
                                builder.getInt64(underlyingTypeSzInBits / 8));
     }
-
-    // The case for allocatables that are not arrays, could perhaps treat these
-    // as just pointer size
-    // if (memberClause.getBounds().empty() &&
-    //     memberClause.getIsFortranAllocatable()) {
-    //   return builder.CreateLoad(
-    //       builder.getInt64Ty(),
-    //       builder.CreateGEP(baseType, basePointer,
-    //                         std::vector<llvm::Value *>{builder.getInt64(0),
-    //                                                    builder.getInt32(1)},
-    //                         "element_size"));
-    // }
   }
 
   return builder.getInt64(underlyingTypeSzInBits / 8);
@@ -1799,7 +1768,6 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
   }
 }
 
-// TODO: Move over bounds calculations, when doing bounds again
 static void processMapWithMembersOf(
     LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
     llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
@@ -1892,27 +1860,74 @@ static void processMapWithMembersOf(
 
     combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
 
-    // TODO:
-    //  1) Add Bounds calculations back in for new method, utilsing the bounds
-    //   operations this time
-    // 4) Clean up OpenMPToLLVMIRTranslation
-    // 5) Rebase on Akash's changes upstream
-    // 6) Push to PR if Slava hasn't said it's a bad idea
-    // 7) finish year end review
+    //   TODO:
+    //      1) Add Bounds calculations back in for new method, utilsing the
+    //      bounds
+    //       operations this time
+    //     4) Clean up OpenMPToLLVMIRTranslation
+    //     5) test what tests work from script and ninja check
+    //     6) Rebase on Akash's changes upstream
+    //     7) retest again
+    //     9) can test with a box load and perhaps removing the pointerlike
+    //     trait from BoxOp
+    // 6) Push to seperate branch to track changes, then squash and rebase to
+    //     update upstream PR
+    //     7) Push to PR if Slava hasn't said it's a bad idea
+    //     8) finish year end review before Tuesday meeting with Dan
 
-    if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
-            memberClause.getBounds()[0].getDefiningOp())) {
-      // TODO: Support dimensions > 1 accesses
-      llvm::Value *loadMember =
-          builder.CreateLoad(builder.getPtrTy(), mapData.Pointers[memberDataIdx]);
-      auto idx = std::vector<llvm::Value *>{builder.CreateSub(
-          moduleTranslation.lookupValue(boundOp.getStartIdx()),
-          builder.getInt64(1))};
-      llvm::Value *memberIdx = builder.CreateInBoundsGEP(
-          mapData.BaseType[memberDataIdx], loadMember, idx, "member_idx");
-      combinedInfo.Pointers.emplace_back(memberIdx);
-      combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
+    // -> fix N-D examples need to always have the extent for box types..
+    // -> fix single alloca
+
+    std::vector<llvm::Value *> idx{builder.getInt64(0)};
+    llvm::Value *offsetAddress = nullptr;
+    if (!memberClause.getBounds().empty()) {
+      if (mapData.BaseType[memberDataIdx]->isArrayTy()) {
+        for (int i = memberClause.getBounds().size() - 1; i >= 0; --i) {
+          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                  memberClause.getBounds()[i].getDefiningOp())) {
+            idx.push_back(
+                moduleTranslation.lookupValue(boundOp.getLowerBound()));
+          }
+        }
+      } else {
+        std::vector<llvm::Value *> dimensionIndexSizeOffset{builder.getInt64(1)};
+
+        for (size_t i = 1; i < memberClause.getBounds().size(); ++i) {
+          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                  memberClause.getBounds()[i].getDefiningOp())) {
+            boundOp.getExtent().dump();
+            dimensionIndexSizeOffset.push_back(builder.CreateMul(
+                moduleTranslation.lookupValue(boundOp.getExtent()),
+                dimensionIndexSizeOffset[i - 1]));
+          }
+        }
+
+        for (int i = memberClause.getBounds().size() - 1; i >= 0; --i) {
+          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                  memberClause.getBounds()[i].getDefiningOp())) {
+            if (!offsetAddress)
+              offsetAddress = builder.CreateMul(
+                  moduleTranslation.lookupValue(boundOp.getLowerBound()),
+                  dimensionIndexSizeOffset[i]);
+            else
+              offsetAddress = builder.CreateAdd(
+                  offsetAddress,
+                  builder.CreateMul(
+                      moduleTranslation.lookupValue(boundOp.getLowerBound()),
+                      dimensionIndexSizeOffset[i]));
+          }
+        }
+      }
     }
+
+    llvm::Value *memberIdx =
+        builder.CreateLoad(builder.getPtrTy(), mapData.Pointers[memberDataIdx]);
+    memberIdx = builder.CreateInBoundsGEP(
+        mapData.BaseType[memberDataIdx], memberIdx,
+        offsetAddress ? std::vector<llvm::Value *>{offsetAddress} : idx,
+        "member_idx");
+    combinedInfo.Pointers.emplace_back(memberIdx);
+    combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
 }
 

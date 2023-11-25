@@ -63,7 +63,9 @@ struct MapInfoOpConversion
     mlir::Type eleTy;
     if (auto boxTy = mlir::dyn_cast<fir::BaseBoxType>(firBoxTys)) {
       eleTy = boxTy.getEleTy();
-      if (auto heapTy = mlir::dyn_cast<fir::HeapType>(boxTy.getEleTy()))
+      if (auto ptrTy = mlir::dyn_cast<fir::PointerType>(eleTy))
+        eleTy = ptrTy.getEleTy();
+      if (auto heapTy = mlir::dyn_cast<fir::HeapType>(eleTy))
         eleTy = heapTy.getEleTy();
       eleTy = getTypeConverter()->convertType(eleTy);
     }
