@@ -1989,19 +1989,7 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
   for (unsigned long i : primaryMapIdx) {
     auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
 
-    bool isImplicit =
-        mapInfoOp.getMapType().value() &
-        static_cast<
-            std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT);
-
-    // TODO: Look into more thoroughly handling implicit semantics, this
-    // mimics what Clang currently does with structures, which is map the
-    // structure and not the internals i.e. the descriptor without the pointer
-    // itself, so not a deep copy, which may be incorrect for
-    // allocatables/pointers, but allows explicit mapping and initial
-    // enter/exit handling
-    if (!isImplicit && !mapInfoOp.getMembers().empty()) {
+    if (!mapInfoOp.getMembers().empty()) {
       processMapWithMembersOf(moduleTranslation, builder, *ompBuilder, dl,
                               combinedInfo, mapData, i, isTargetParams);
       continue;
