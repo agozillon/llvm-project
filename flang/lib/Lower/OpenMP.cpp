@@ -3003,14 +3003,16 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
             llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
         mlir::omp::VariableCaptureKind captureKind =
             mlir::omp::VariableCaptureKind::ByRef;
-        if (auto refType = baseOp.getType().dyn_cast<fir::ReferenceType>()) {
-          auto eleType = refType.getElementType();
-          if (fir::isa_trivial(eleType) || fir::isa_char(eleType)) {
-            captureKind = mlir::omp::VariableCaptureKind::ByCopy;
-          } else if (!fir::isa_builtin_cptr_type(eleType)) {
-            mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-            mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-          }
+
+        mlir::Type eleType = baseOp.getType();
+        if (auto refType = baseOp.getType().dyn_cast<fir::ReferenceType>())
+          eleType = refType.getElementType();
+
+        if (fir::isa_trivial(eleType) || fir::isa_char(eleType)) {
+          captureKind = mlir::omp::VariableCaptureKind::ByCopy;
+        } else if (!fir::isa_builtin_cptr_type(eleType)) {
+          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
         }
 
         mlir::Value mapOp;
