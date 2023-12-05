@@ -1845,7 +1845,7 @@ static mlir::omp::MapInfoOp processDescriptorTypeMappings(
     Fortran::lower::StatementContext &stmtCtx,
     Fortran::lower::AbstractConverter &converter, mlir::Location loc,
     mlir::Value descriptorAddr, mlir::Value descDataBaseAddr,
-    mlir::SmallVector<mlir::Value> &bounds, std::string asFortran,
+    mlir::ValueRange bounds, std::string asFortran,
     llvm::omp::OpenMPOffloadMappingFlags mapCaptureType) {
   llvm::SmallVector<mlir::Value> descriptorBaseAddrMembers;
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
