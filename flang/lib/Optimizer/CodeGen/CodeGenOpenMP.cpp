@@ -59,9 +59,7 @@ struct MapInfoOpConversion
     for (mlir::NamedAttribute attr : curOp->getAttrs()) {
       if (auto typeAttr = mlir::dyn_cast<mlir::TypeAttr>(attr.getValue())) {
         mlir::Type newAttr;
-        if (fir::isPointerType(typeAttr.getValue()) ||
-            fir::isAllocatableType(typeAttr.getValue()) ||
-            fir::isAssumedShape(typeAttr.getValue())) {
+        if (fir::isTypeWithDescriptor(typeAttr.getValue())) {
           newAttr = lowerTy().convertBoxTypeAsStruct(
               mlir::cast<fir::BaseBoxType>(typeAttr.getValue()));
         } else {
