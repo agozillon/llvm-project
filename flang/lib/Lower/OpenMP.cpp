@@ -1869,22 +1869,8 @@ static mlir::omp::MapInfoOp processDescriptorTypeMappings(
           mapCaptureType),
       mlir::omp::VariableCaptureKind::ByRef, descDataBaseAddr.getType()));
 
-  if (fir::BaseBoxType baseBoxTy = llvm::dyn_cast<fir::BaseBoxType>(
-          fir::unwrapRefType(descriptor.getType()))) {
-    if (fir::boxHasAddendum(baseBoxTy)) {
-      mlir::Value addendumAddrAddr = firOpBuilder.create<fir::BoxOffsetOp>(
-          loc, descriptor, fir::BoxFieldAttr::derived_type);
-      // NOTE: We have no addendumAddr, but we must provide a varPtr alongside
-      // the varPtrPtr so we replicate it across the two for now.
-      descriptorBaseAddrMembers.push_back(createMapInfoOp(
-          firOpBuilder, loc, addendumAddrAddr, addendumAddrAddr, asFortran, {},
-          {},
-          static_cast<
-              std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-              mapCaptureType),
-          mlir::omp::VariableCaptureKind::ByRef, addendumAddrAddr.getType()));
-    }
-  }
+  // TODO: map the addendum segment of the descriptor, similarly to the abose
+  // base address/data pointer member.
 
   return createMapInfoOp(
       firOpBuilder, loc, descriptor, mlir::Value{}, asFortran, {},
