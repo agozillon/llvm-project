@@ -1851,6 +1851,14 @@ static mlir::omp::MapInfoOp processDescriptorTypeMappings(
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
 
   mlir::Value descriptor = descriptorAddr;
+
+  // The fir::BoxOffsetOp only works with !fir.ref<!fir.box<...>> types, as
+  // allowing it to access non-reference box operations can cause some
+  // problematic SSA IR. However, in the case of assumed shape's the type
+  // is not a !fir.ref, in these cases to retrieve the appropriate
+  // !fir.ref<!fir.box<...>> to access the data we need to map we must
+  // perform an alloca and then store to it and retrieve the data from the new
+  // alloca.
   if (fir::isAssumedShape(fir::unwrapRefType(descriptorAddr.getType()))) {
     mlir::OpBuilder::InsertPoint insPt = firOpBuilder.saveInsertionPoint();
     firOpBuilder.setInsertionPointToStart(firOpBuilder.getAllocaBlock());
