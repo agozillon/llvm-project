@@ -30,8 +30,8 @@ subroutine mapType_array
   !$omp end target
 end subroutine mapType_array
 
-!CHECK: @.offload_sizes{{.*}} = private unnamed_addr constant [1 x i64] [i64 24]
-!CHECK: @.offload_maptypes{{.*}} = private unnamed_addr constant [1 x i64] [i64 547]
+!CHECK: @.offload_sizes{{.*}} = private unnamed_addr constant [3 x i64] [i64 0, i64 24, i64 4]
+!CHECK: @.offload_maptypes{{.*}} = private unnamed_addr constant [3 x i64] [i64 32, i64 281474976710657, i64 281474976711187]
 subroutine mapType_ptr
   integer, pointer :: a
   !$omp target
@@ -39,8 +39,8 @@ subroutine mapType_ptr
   !$omp end target
 end subroutine mapType_ptr
 
-!CHECK: @.offload_sizes{{.*}} = private unnamed_addr constant [1 x i64] [i64 24]
-!CHECK: @.offload_maptypes{{.*}} = private unnamed_addr constant [1 x i64] [i64 547]
+!CHECK: @.offload_sizes{{.*}} = private unnamed_addr constant [3 x i64] [i64 0, i64 24, i64 4]
+!CHECK: @.offload_maptypes{{.*}} = private unnamed_addr constant [3 x i64] [i64 32, i64 281474976710657, i64 281474976711187]
 subroutine mapType_allocatable
   integer, allocatable :: a
   allocate(a)
