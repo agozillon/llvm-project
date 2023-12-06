@@ -334,8 +334,7 @@ bool isAllocatableOrPointerArray(mlir::Type ty) {
 }
 
 bool isTypeWithDescriptor(mlir::Type ty) {
-  if (fir::isPointerType(ty) || fir::isAllocatableType(ty) ||
-      fir::isAssumedShape(ty))
+  if (mlir::isa<fir::BaseBoxType>(unwrapRefType(ty)))
     return true;
   return false;
 }

@@ -1859,7 +1859,7 @@ static mlir::omp::MapInfoOp processDescriptorTypeMappings(
   // !fir.ref<!fir.box<...>> to access the data we need to map we must
   // perform an alloca and then store to it and retrieve the data from the new
   // alloca.
-  if (fir::isAssumedShape(fir::unwrapRefType(descriptorAddr.getType()))) {
+  if (mlir::isa<fir::BaseBoxType>(descriptorAddr.getType())) {
     mlir::OpBuilder::InsertPoint insPt = firOpBuilder.saveInsertionPoint();
     firOpBuilder.setInsertionPointToStart(firOpBuilder.getAllocaBlock());
     descriptor =
@@ -1877,7 +1877,7 @@ static mlir::omp::MapInfoOp processDescriptorTypeMappings(
           mapCaptureType),
       mlir::omp::VariableCaptureKind::ByRef, descDataBaseAddr.getType()));
 
-  // TODO: map the addendum segment of the descriptor, similarly to the abose
+  // TODO: map the addendum segment of the descriptor, similarly to the above
   // base address/data pointer member.
 
   return createMapInfoOp(
