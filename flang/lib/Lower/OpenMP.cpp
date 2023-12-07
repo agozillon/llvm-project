@@ -1956,7 +1956,7 @@ bool ClauseProcessor::processMap(
           auto origSymbol =
               converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
           mlir::Value mapOp, symAddr;
-          if (fir::isTypeWithDescriptor(origSymbol.getType())) {
+          if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType())) {
             symAddr = origSymbol;
             mapOp = processDescriptorTypeMappings(
                 semanticsContext, stmtCtx, converter, clauseLocation,
