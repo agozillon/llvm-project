@@ -1948,11 +1948,13 @@ bool ClauseProcessor::processMap(
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
 
-          Fortran::lower::AddrAndBoundsInfo info = Fortran::lower::gatherDataOperandAddrAndBounds<
-              Fortran::parser::OmpObject, mlir::omp::DataBoundsType,
-              mlir::omp::DataBoundsOp>(
-              converter, firOpBuilder, semanticsContext, stmtCtx, ompObject,
-              clauseLocation, asFortran, bounds, treatIndexAsSection);
+          Fortran::lower::AddrAndBoundsInfo info =
+              Fortran::lower::gatherDataOperandAddrAndBounds<
+                  Fortran::parser::OmpObject, mlir::omp::DataBoundsOp,
+                  mlir::omp::DataBoundsType>(
+                  converter, firOpBuilder, semanticsContext, stmtCtx, ompObject,
+                  clauseLocation, asFortran, bounds, treatIndexAsSection);
+
           auto origSymbol =
               converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
           mlir::Value mapOp, symAddr;
@@ -3011,7 +3013,7 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
         if (fir::isTypeWithDescriptor(baseOp.getType())) {
           mapOp = processDescriptorTypeMappings(
               semanticsContext, stmtCtx, converter, baseOp.getLoc(), baseOp,
-              baseAddr, bounds, name.str(), mapFlag);
+              info.addr, bounds, name.str(), mapFlag);
         } else {
           mapOp = createMapInfoOp(
               converter.getFirOpBuilder(), baseOp.getLoc(), baseOp,
