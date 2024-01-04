@@ -1233,7 +1233,8 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
 // 2.14.2 target data Construct
 //===---------------------------------------------------------------------===//
 
-def Target_DataOp: OpenMP_Op<"target_data", [AttrSizedOperandSegments]>{
+def Target_DataOp: OpenMP_Op<"target_data", [AttrSizedOperandSegments, 
+                                             MapClauseOwningOpInterface]>{
   let summary = "target data construct";
   let description = [{
     Map variables to a device data environment for the extent of the region.
@@ -1290,7 +1291,8 @@ def Target_DataOp: OpenMP_Op<"target_data", [AttrSizedOperandSegments]>{
 //===---------------------------------------------------------------------===//
 
 def Target_EnterDataOp: OpenMP_Op<"target_enter_data",
-                                                 [AttrSizedOperandSegments]>{
+                                                 [AttrSizedOperandSegments, 
+                                                  MapClauseOwningOpInterface]>{
   let  summary = "target enter data construct";
   let description = [{
     The target enter data directive specifies that variables are mapped to
@@ -1336,7 +1338,8 @@ def Target_EnterDataOp: OpenMP_Op<"target_enter_data",
 //===---------------------------------------------------------------------===//
 
 def Target_ExitDataOp: OpenMP_Op<"target_exit_data",
-                                                 [AttrSizedOperandSegments]>{
+                                                 [AttrSizedOperandSegments,
+                                                  MapClauseOwningOpInterface]>{
   let  summary = "target exit data construct";
   let description = [{
     The target exit data directive specifies that variables are mapped to a
@@ -1382,7 +1385,8 @@ def Target_ExitDataOp: OpenMP_Op<"target_exit_data",
 //===---------------------------------------------------------------------===//
 
 def Target_UpdateDataOp: OpenMP_Op<"target_update_data",
-                                                 [AttrSizedOperandSegments]>{
+                                                 [AttrSizedOperandSegments,
+                                                  MapClauseOwningOpInterface]>{
   let  summary = "target update data construct";
   let description = [{
     The target update directive makes the corresponding list items in the device
@@ -1414,13 +1418,13 @@ def Target_UpdateDataOp: OpenMP_Op<"target_update_data",
   let arguments = (ins Optional<I1>:$if_expr,
                        Optional<AnyInteger>:$device,
                        UnitAttr:$nowait,
-                       Variadic<OpenMP_PointerLikeType>:$motion_operands);
+                       Variadic<OpenMP_PointerLikeType>:$map_operands);
 
   let assemblyFormat = [{
     oilist(`if` `(` $if_expr `:` type($if_expr) `)`
     | `device` `(` $device `:` type($device) `)`
     | `nowait` $nowait
-    | `motion_entries` `(` $motion_operands `:` type($motion_operands) `)`
+    | `motion_entries` `(` $map_operands `:` type($map_operands) `)`
     ) attr-dict
    }];
 
@@ -1431,7 +1435,8 @@ def Target_UpdateDataOp: OpenMP_Op<"target_update_data",
 // 2.14.5 target construct
 //===----------------------------------------------------------------------===//
 
-def TargetOp : OpenMP_Op<"target",[IsolatedFromAbove, OutlineableOpenMPOpInterface, AttrSizedOperandSegments]> {
+def TargetOp : OpenMP_Op<"target",[IsolatedFromAbove, MapClauseOwningOpInterface,
+                                   OutlineableOpenMPOpInterface, AttrSizedOperandSegments]> {
   let summary = "target construct";
   let description = [{
     The target construct includes a region of code which is to be executed

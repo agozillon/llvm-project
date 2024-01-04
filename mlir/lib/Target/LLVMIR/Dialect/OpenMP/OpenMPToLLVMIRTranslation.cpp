@@ -1640,6 +1640,7 @@ getRefPtrIfDeclareTarget(mlir::Value value,
 // value) more than neccessary.
 struct MapInfoData : llvm::OpenMPIRBuilder::MapInfosTy {
   llvm::SmallVector<bool, 4> IsDeclareTarget;
+  llvm::SmallVector<bool, 4> IsAMember;
   llvm::SmallVector<mlir::Operation *, 4> MapClause;
   llvm::SmallVector<llvm::Value *, 4> OriginalValue;
   // Stripped off array/pointer to get the underlying
@@ -1728,13 +1729,11 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
                                    LLVM::ModuleTranslation &moduleTranslation,
                                    DataLayout &dl,
                                    llvm::IRBuilderBase &builder) {
-  auto mapFill = [&](mlir::Value mapValue) {
-    assert(mlir::isa<mlir::omp::MapInfoOp>(mapValue.getDefiningOp()) &&
-           "missing map info operation or incorrect map info operation type");
+  for (mlir::Value mapValue : mapOperands) {
     if (auto mapOp = mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(
             mapValue.getDefiningOp())) {
-      mapData.OriginalValue.push_back(moduleTranslation.lookupValue(
-          mapOp.getVarPtrPtr() ? mapOp.getVarPtrPtr() : mapOp.getVarPtr()));
+      mapData.OriginalValue.push_back(
+          moduleTranslation.lookupValue(mapOp.getVarPtr()));
       mapData.Pointers.push_back(mapData.OriginalValue.back());
 
       if (llvm::Value *refPtr =
@@ -1759,41 +1758,27 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
           mapOp.getLoc(), *moduleTranslation.getOpenMPBuilder()));
       mapData.DevicePointers.push_back(
           llvm::OpenMPIRBuilder::DeviceInfoTy::None);
-    }
-  };
 
-  // In the case of Fortran descriptors some members get added implicitly
-  // after the target region has been generated during CodeGen lowering
-  // which prevents them from being added trivially to the target region
-  // as map arguments, we must handle this case here by generating
-  // MapInfoData for them.
-  // TODO: Revisit this when implementing derived types explicit member
-  // mapping, we likely want to represent these identically to simplify
-  // the overall lowering
-  SmallVector<Value> mapMemberOperands;
-  for (size_t i = 0; i < mapOperands.size(); ++i) {
-    auto mapInfoOp =
-        mlir::dyn_cast<mlir::omp::MapInfoOp>(mapOperands[i].getDefiningOp());
-    for (auto members : mapInfoOp.getMembers()) {
-      if (!std::any_of(mapOperands.begin(), mapOperands.end(),
-                       [&](auto mapOp) {
-                         return mapOp.getDefiningOp() ==
-                                members.getDefiningOp();
-                       }) &&
-          !std::any_of(mapMemberOperands.begin(), mapMemberOperands.end(),
-                       [&](auto mapOp) {
-                         return mapOp.getDefiningOp() ==
-                                members.getDefiningOp();
-                       }))
-        mapMemberOperands.push_back(members);
+      // Check if this is a member mapping and correctly assign that it is, if
+      // it is a member of a larger object.
+      // TODO: Need better handling of members, and distinguishing of members
+      // that are implicitly allocated on device vs explicitly passed in as
+      // arguments.
+      // TODO: May require some further additions to support nested record
+      // types, i.e. member maps that can have member maps.
+      mapData.IsAMember.push_back(false);
+      for (mlir::Value mapValue : mapOperands) {
+        if (auto map = mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(
+                mapValue.getDefiningOp())) {
+          for (auto member : map.getMembers()) {
+            if (member == mapOp) {
+              mapData.IsAMember.back() = true;
+            }
+          }
+        }
+      }
     }
   }
-
-  for (mlir::Value mapValue : mapOperands)
-    mapFill(mapValue);
-
-  for (mlir::Value mapValue : mapMemberOperands)
-    mapFill(mapValue);
 }
 
 static void processMapWithMembersOf(
@@ -1960,35 +1945,22 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
     combinedInfo.Names.clear();
   };
 
-  llvm::SmallVector<size_t, 4> primaryMapIdx;
-  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-    primaryMapIdx.push_back(i);
-  }
-
-  // TODO: Handle nested MembersOf, currently only cares about the first level
-  // of nesting (all that was relevant for Fortran descriptors), but a slight
-  // refactoring of mapInfoData to hold nestings or membersOf may be a better
-  // approach to simplify things.
-  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-    auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
-    for (auto member : mapInfoOp.getMembers()) {
-      for (size_t j = 0; j < primaryMapIdx.size(); j++) {
-        if (member.getDefiningOp() == mapData.MapClause[primaryMapIdx[j]]) {
-          primaryMapIdx.erase(&primaryMapIdx[j]);
-          j--;
-        }
-      }
-    }
-  }
-
   // We operate under the assumption that all vectors that are
   // required in MapInfoData are of equal lengths (either filled with
   // default constructed data or appropiate information) so we can
   // utilise the size from any component of MapInfoData, if we can't
   // something is missing from the initial MapInfoData construction.
-  for (unsigned long i : primaryMapIdx) {
-    auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
+  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
+    // NOTE/TODO: We currently do not handle member mapping seperately from it's
+    // parent or explicit mapping of a parent and member in the same operation,
+    // this will need to change in the near future, for now we primarily handle
+    // descriptor mapping from fortran, generalised as mapping record types
+    // with implicit member maps. This lowering needs further generalisation to
+    // fully support fortran derived types, and C/C++ structures and classes.
+    if (mapData.IsAMember[i])
+      continue;
 
+    auto mapInfoOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]);
     if (!mapInfoOp.getMembers().empty()) {
       processMapWithMembersOf(moduleTranslation, builder, *ompBuilder, dl,
                               combinedInfo, mapData, i, isTargetParams);
@@ -2139,7 +2111,7 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
                   deviceID = intAttr.getInt();
 
             RTLFn = llvm::omp::OMPRTL___tgt_target_data_update_mapper;
-            mapOperands = updateDataOp.getMotionOperands();
+            mapOperands = updateDataOp.getMapOperands();
             return success();
           })
           .Default([&](Operation *op) {
@@ -2633,7 +2605,12 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   llvm::SmallVector<llvm::Value *, 4> kernelInput;
   for (size_t i = 0; i < mapOperands.size(); ++i) {
     // declare target arguments are not passed to kernels as arguments
-    if (!mapData.IsDeclareTarget[i])
+    // TODO: We currently do not handle cases where a member is explicitly
+    // passed in as an argument, this will likley need to be handled in
+    // the near future, rather than using IsAMember, it may be better to
+    // test if the relevant BlockArg is used within the target region and
+    // then use that as a basis for exclusion in the kernel inputs.
+    if (!mapData.IsDeclareTarget[i] && !mapData.IsAMember[i])
       kernelInput.push_back(mapData.OriginalValue[i]);
   }
 

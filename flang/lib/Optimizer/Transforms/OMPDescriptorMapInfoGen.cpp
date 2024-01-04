@@ -12,6 +12,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include <iterator>
 
 namespace fir {
 #define GEN_PASS_DEF_OMPDESCRIPTORMAPINFOGENPASS
@@ -48,7 +49,8 @@ class OMPDescriptorMapInfoGenPass
   }
 
   void genDescriptorMemberMaps(mlir::omp::MapInfoOp op,
-                               fir::FirOpBuilder &builder) {
+                               fir::FirOpBuilder &builder,
+                               mlir::Operation *target) {
     llvm::SmallVector<mlir::Value> descriptorBaseAddrMembers;
     mlir::Location loc = builder.getUnknownLoc();
     mlir::Value descriptor = op.getVarPtr();
@@ -92,8 +94,36 @@ class OMPDescriptorMapInfoGenPass
 
     op.getVarPtrMutable().assign(descriptor);
     op.setVarType(fir::unwrapRefType(descriptor.getType()));
-    op.getMembersMutable().assign(descriptorBaseAddrMembers);
+    op.getMembersMutable().append(descriptorBaseAddrMembers);
     op.getBoundsMutable().assign(llvm::SmallVector<mlir::Value>{});
+
+    // could use a template to generalise to other TargetOps
+    if (auto mapClauseOwner =
+            llvm::dyn_cast<mlir::omp::MapClauseOwningOpInterface>(target)) {
+      llvm::SmallVector<mlir::Value> newMapOps;
+      for (size_t i = 0; i < mapClauseOwner.getMapOperands().size(); ++i) {
+        if (mapClauseOwner.getMapOperands()[i] == op) {
+          // Push new implicit maps generated for the descriptor.
+          newMapOps.push_back(descriptorBaseAddrMembers[0]);
+
+          // for TargetOp's which have IsolatedFromAbove we must align the
+          // new additional map operand with an appropriate BlockArgument,
+          // as the printing and later processing currently requires a 1:1
+          // mapping of BlockArgs to MapInfoOp's at the same placement in
+          // each array (BlockArgs and MapOperands).
+          if (auto targetOp = llvm::dyn_cast<mlir::omp::TargetOp>(target)) {
+            targetOp.getRegion().insertArgument(
+                i, descriptorBaseAddrMembers[0].getType(), loc);
+          }
+
+          newMapOps.push_back(mapClauseOwner.getMapOperands()[i]);
+        } else {
+          newMapOps.push_back(mapClauseOwner.getMapOperands()[i]);
+        }
+      }
+
+      mapClauseOwner.getMapOperandsMutable().assign(newMapOps);
+    }
   }
 
   // This pass executes on mlir::ModuleOp's finding omp::MapInfoOp's containing
@@ -108,7 +138,9 @@ class OMPDescriptorMapInfoGenPass
       if (fir::isTypeWithDescriptor(op.getVarType()) ||
           mlir::isa<fir::BoxAddrOp>(op.getVarPtr().getDefiningOp())) {
         builder.setInsertionPoint(op);
-        genDescriptorMemberMaps(op, builder);
+        // Currently a MapInfoOp argument can only show up on a single target
+        // user so we can retrieve and use the first user.
+        genDescriptorMemberMaps(op, builder, *op->getUsers().begin());
       }
     });
   }
