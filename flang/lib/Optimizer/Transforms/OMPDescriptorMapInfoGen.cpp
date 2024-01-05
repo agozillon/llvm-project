@@ -80,7 +80,6 @@ class OMPDescriptorMapInfoGenPass
     op.getMembersMutable().append(descriptorBaseAddrMembers);
     op.getBoundsMutable().assign(llvm::SmallVector<mlir::Value>{});
 
-    // could use a template to generalise to other TargetOps
     if (auto mapClauseOwner =
             llvm::dyn_cast<mlir::omp::MapClauseOwningOpInterface>(target)) {
       llvm::SmallVector<mlir::Value> newMapOps;
@@ -116,9 +115,6 @@ class OMPDescriptorMapInfoGenPass
   void runOnOperation() override {
     fir::KindMapping kindMap = fir::getKindMapping(getOperation());
     fir::FirOpBuilder builder{getOperation(), std::move(kindMap)};
-
-    // 2) look into adding some documentation on this.
-    // 3) fix tests.
 
     getOperation()->walk([&](mlir::omp::MapInfoOp op) {
       if (fir::isTypeWithDescriptor(op.getVarType()) ||
