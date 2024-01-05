@@ -24,30 +24,6 @@ class OMPDescriptorMapInfoGenPass
     : public fir::impl::OMPDescriptorMapInfoGenPassBase<
           OMPDescriptorMapInfoGenPass> {
 
-  mlir::omp::MapInfoOp
-  createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
-                  mlir::Value baseAddr, mlir::Value varPtrPtr, std::string name,
-                  mlir::SmallVector<mlir::Value> bounds,
-                  mlir::SmallVector<mlir::Value> members, uint64_t mapType,
-                  mlir::omp::VariableCaptureKind mapCaptureType,
-                  mlir::Type retTy, bool isVal = false) {
-    if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
-      baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
-      retTy = baseAddr.getType();
-    }
-
-    mlir::TypeAttr varType = mlir::TypeAttr::get(
-        llvm::cast<mlir::omp::PointerLikeType>(retTy).getElementType());
-
-    mlir::omp::MapInfoOp op = builder.create<mlir::omp::MapInfoOp>(
-        loc, retTy, baseAddr, varType, varPtrPtr, members, bounds,
-        builder.getIntegerAttr(builder.getIntegerType(64, false), mapType),
-        builder.getAttr<mlir::omp::VariableCaptureKindAttr>(mapCaptureType),
-        builder.getStringAttr(name));
-
-    return op;
-  }
-
   void genDescriptorMemberMaps(mlir::omp::MapInfoOp op,
                                fir::FirOpBuilder &builder,
                                mlir::Operation *target) {
@@ -84,13 +60,20 @@ class OMPDescriptorMapInfoGenPass
     mlir::Value baseAddrAddr = builder.create<fir::BoxOffsetOp>(
         loc, descriptor, fir::BoxFieldAttr::base_addr);
 
-    descriptorBaseAddrMembers.push_back(createMapInfoOp(
-        builder, loc, baseAddrAddr, {}, "", op.getBounds(), {},
-        op.getMapType().value(), mlir::omp::VariableCaptureKind::ByRef,
-        fir::unwrapRefType(baseAddrAddr.getType())));
+    descriptorBaseAddrMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
+        loc, baseAddrAddr.getType(), baseAddrAddr,
+        llvm::cast<mlir::omp::PointerLikeType>(
+            fir::unwrapRefType(baseAddrAddr.getType()))
+            .getElementType(),
+        mlir::Value{}, mlir::SmallVector<mlir::Value>{}, op.getBounds(),
+        builder.getIntegerAttr(builder.getIntegerType(64, false),
+                               op.getMapType().value()),
+        builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+            mlir::omp::VariableCaptureKind::ByRef),
+        builder.getStringAttr("")));
 
-    // TODO: map the addendum segment of the descriptor, similarly to the above
-    // base address/data pointer member.
+    // TODO: map the addendum segment of the descriptor, similarly to the
+    // above base address/data pointer member.
 
     op.getVarPtrMutable().assign(descriptor);
     op.setVarType(fir::unwrapRefType(descriptor.getType()));
@@ -134,9 +117,13 @@ class OMPDescriptorMapInfoGenPass
     fir::KindMapping kindMap = fir::getKindMapping(getOperation());
     fir::FirOpBuilder builder{getOperation(), std::move(kindMap)};
 
+    // 2) look into adding some documentation on this.
+    // 3) fix tests.
+
     getOperation()->walk([&](mlir::omp::MapInfoOp op) {
       if (fir::isTypeWithDescriptor(op.getVarType()) ||
-          mlir::isa<fir::BoxAddrOp>(op.getVarPtr().getDefiningOp())) {
+          mlir::isa_and_present<fir::BoxAddrOp>(
+              op.getVarPtr().getDefiningOp())) {
         builder.setInsertionPoint(op);
         // Currently a MapInfoOp argument can only show up on a single target
         // user so we can retrieve and use the first user.

@@ -118,8 +118,8 @@ module attributes {omp.is_target_device = false} {
     %95 = llvm.getelementptr %14[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)>
     %96 = omp.map_info var_ptr(%95 : !llvm.ptr, f32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = "scalar"}
     %97 = omp.map_info var_ptr(%14 : !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)>) map_clauses(tofrom) capture(ByRef) members(%96 : !llvm.ptr) -> !llvm.ptr {name = "scalar"}
-    omp.target map_entries(%81 -> %arg0, %94 -> %arg1, %97 -> %arg2 : !llvm.ptr, !llvm.ptr, !llvm.ptr) {
-    ^bb0(%arg0: !llvm.ptr, %arg1: !llvm.ptr, %arg2: !llvm.ptr):
+    omp.target map_entries(%80 -> %arg0, %81 -> %arg1, %93 -> %arg2, %94 -> %arg3, %96 -> %arg4, %97 -> %arg5 : !llvm.ptr, !llvm.ptr, !llvm.ptr, !llvm.ptr, !llvm.ptr, !llvm.ptr) {
+    ^bb0(%arg0: !llvm.ptr, %arg1: !llvm.ptr, %arg2: !llvm.ptr, %arg3: !llvm.ptr, %arg4: !llvm.ptr, %arg5: !llvm.ptr):
       %98 = llvm.mlir.constant(1 : i32) : i32
       %99 = llvm.alloca %98 x !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)> {alignment = 8 : i64} : (i32) -> !llvm.ptr
       %100 = llvm.alloca %98 x !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)> {alignment = 8 : i64} : (i32) -> !llvm.ptr
@@ -129,7 +129,7 @@ module attributes {omp.is_target_device = false} {
       %104 = llvm.mlir.constant(3 : index) : i64
       %105 = llvm.mlir.constant(1 : index) : i64
       %106 = llvm.mlir.constant(1.000000e+00 : f32) : f32
-      %107 = llvm.load %arg0 : !llvm.ptr -> !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
+      %107 = llvm.load %arg1 : !llvm.ptr -> !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
       llvm.store %107, %101 : !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>, !llvm.ptr
       %108 = llvm.getelementptr %101[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
       %109 = llvm.load %108 : !llvm.ptr -> !llvm.ptr
@@ -146,7 +146,7 @@ module attributes {omp.is_target_device = false} {
       %120 = llvm.add %119, %116  : i64
       %121 = llvm.getelementptr %109[%120] : (!llvm.ptr, i64) -> !llvm.ptr, f32
       llvm.store %106, %121 : f32, !llvm.ptr
-      %122 = llvm.load %arg1 : !llvm.ptr -> !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
+      %122 = llvm.load %arg3 : !llvm.ptr -> !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
       llvm.store %122, %100 : !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>, !llvm.ptr
       %123 = llvm.getelementptr %100[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8, array<1 x array<3 x i64>>)>
       %124 = llvm.load %123 : !llvm.ptr -> !llvm.ptr
@@ -182,7 +182,7 @@ module attributes {omp.is_target_device = false} {
       %152 = llvm.insertvalue %136, %151[0] : !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)> 
       llvm.store %152, %99 : !llvm.struct<(ptr, i64, i32, i8, i8, i8, i8)>, !llvm.ptr
       %153 = llvm.mlir.addressof @_QQclX6606f061cfd55e600f1165aa97a647a5 : !llvm.ptr
-      %154 = llvm.call @_FortranAAssign(%arg2, %99, %153, %102) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32) -> !llvm.struct<()>
+      %154 = llvm.call @_FortranAAssign(%arg5, %99, %153, %102) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32) -> !llvm.struct<()>
       omp.terminator
     }
     llvm.return
