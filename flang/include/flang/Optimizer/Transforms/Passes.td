@@ -322,8 +322,9 @@ def OMPDescriptorMapInfoGenPass
     : Pass<"omp-descriptor-map-info-gen", "mlir::ModuleOp"> {
   let summary = "expands OpenMP MapInfo operations containing descriptors";
   let description = [{
-    Expands MapInfo operations containing descriptor types into multiple MapInfo's for each pointer element in 
-    the descriptor that requires explicit individual mapping by the OpenMP runtime.
+    Expands MapInfo operations containing descriptor types into multiple 
+    MapInfo's for each pointer element in the descriptor that requires 
+    explicit individual mapping by the OpenMP runtime.
   }];
   let constructor = "::fir::createOMPDescriptorMapInfoGenPass()";
   let dependentDialects = ["mlir::omp::OpenMPDialect"];

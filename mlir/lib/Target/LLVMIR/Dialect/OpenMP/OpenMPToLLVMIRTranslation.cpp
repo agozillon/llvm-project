@@ -1781,15 +1781,23 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
   }
 }
 
-static void processMapWithMembersOf(
+// This creates two insertions into the MapInfosTy data structure for the
+// "parent" of a set of members, (usually a container e.g.
+// class/structure/derived type) when subsequent members have also been
+// explicitly mapped on the same map clause. Certain types, such as Fortran
+// descriptors are mapped like this as well, however, the members are
+// implicit as far as a user is concerned, but we must explicitly map them
+// internally.
+//
+// This function also returns the memberOfFlag for this particular parent,
+// which is utilised in subsequent member mappings (by modifying there map type
+// with it) to indicate that a member is part of this parent and should be
+// treated by the runtime as such. Important to achieve the correct mapping.
+static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
     LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
     llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
     llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo, MapInfoData &mapData,
     uint64_t mapDataIndex, bool isTargetParams) {
-  auto parentClause =
-      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
-
-  ////////// First Parent Map Segment //////////
   // Map the first segment of our structure
   combinedInfo.Types.emplace_back(
       isTargetParams
@@ -1821,7 +1829,6 @@ static void processMapWithMembersOf(
       /*isSigned=*/false);
   combinedInfo.Sizes.push_back(size);
 
-  ////////// Second Parent Map Segment //////////
   // This creates the initial MEMBER_OF mapping that consists of
   // the parent/top level container (same as above effectively, except
   // with a fixed initial compile time size and seperate maptype which
@@ -1846,7 +1853,19 @@ static void processMapWithMembersOf(
   combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
   combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIndex]);
 
-  ////////// Mapping of Members Segment //////////
+  return memberOfFlag;
+}
+
+// This function is intended to add explicit mappings of members
+static void processMapMembersWithParent(
+    LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
+    llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
+    llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo, MapInfoData &mapData,
+    uint64_t mapDataIndex, llvm::omp::OpenMPOffloadMappingFlags memberOfFlag) {
+
+  auto parentClause =
+      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+
   for (auto mappedMembers : parentClause.getMembers()) {
     auto memberClause =
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mappedMembers.getDefiningOp());
@@ -1923,6 +1942,19 @@ static void processMapWithMembersOf(
     combinedInfo.Pointers.emplace_back(memberIdx);
     combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
+}
+
+static void processMapWithMembersOf(
+    LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
+    llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
+    llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo, MapInfoData &mapData,
+    uint64_t mapDataIndex, bool isTargetParams) {
+  llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
+      mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
+                           combinedInfo, mapData, mapDataIndex, isTargetParams);
+  processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
+                              combinedInfo, mapData, mapDataIndex,
+                              memberOfParentFlag);
 }
 
 // Generate all map related information and fill the combinedInfo.
