@@ -1,9 +1,26 @@
+//===- OMPDescriptorMapInfoGen.cpp
+//---------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+/// \file
+/// An OpenMP dialect related pass for FIR/HLFIR which expands MapInfoOp's
+/// containing descriptor related types (fir::BoxType's) into multiple
+/// MapInfoOp's containing the parent descriptor and pointer member components
+/// for individual mapping, treating the descriptor type as a record type for
+/// later lowering in the OpenMP dialect.
+//===----------------------------------------------------------------------===//
+
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
 #include "flang/Optimizer/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -75,11 +92,6 @@ class OMPDescriptorMapInfoGenPass
     // TODO: map the addendum segment of the descriptor, similarly to the
     // above base address/data pointer member.
 
-    op.getVarPtrMutable().assign(descriptor);
-    op.setVarType(fir::unwrapRefType(descriptor.getType()));
-    op.getMembersMutable().append(baseAddr);
-    op.getBoundsMutable().assign(llvm::SmallVector<mlir::Value>{});
-
     if (auto mapClauseOwner =
             llvm::dyn_cast<mlir::omp::MapClauseOwningOpInterface>(target)) {
       llvm::SmallVector<mlir::Value> newMapOps;
@@ -98,12 +110,21 @@ class OMPDescriptorMapInfoGenPass
           if (auto targetOp = llvm::dyn_cast<mlir::omp::TargetOp>(target))
             targetOp.getRegion().insertArgument(i, baseAddr.getType(), loc);
         }
-
         newMapOps.push_back(mapOperandsArr[i]);
       }
-
       mapClauseOwner.getMapOperandsMutable().assign(newMapOps);
     }
+
+    mlir::Value newDescParentMapOp = builder.create<mlir::omp::MapInfoOp>(
+        op->getLoc(), op.getResult().getType(), descriptor,
+        fir::unwrapRefType(descriptor.getType()), mlir::Value{},
+        mlir::SmallVector<mlir::Value>{baseAddr},
+        mlir::SmallVector<mlir::Value>{},
+        builder.getIntegerAttr(builder.getIntegerType(64, false),
+                               op.getMapType().value()),
+        op.getMapCaptureTypeAttr(), op.getNameAttr());
+    op.replaceAllUsesWith(newDescParentMapOp);
+    op->erase();
   }
 
   // This pass executes on mlir::ModuleOp's finding omp::MapInfoOp's containing
@@ -111,10 +132,12 @@ class OMPDescriptorMapInfoGenPass
   // expanding them into multiple omp::MapInfoOp's for each pointer member
   // contained within the descriptor.
   void runOnOperation() override {
-    fir::KindMapping kindMap = fir::getKindMapping(getOperation());
-    fir::FirOpBuilder builder{getOperation(), std::move(kindMap)};
+    mlir::func::FuncOp func = getOperation();
+    mlir::ModuleOp module = func->getParentOfType<mlir::ModuleOp>();
+    fir::KindMapping kindMap = fir::getKindMapping(module);
+    fir::FirOpBuilder builder{module, std::move(kindMap)};
 
-    getOperation()->walk([&](mlir::omp::MapInfoOp op) {
+    func->walk([&](mlir::omp::MapInfoOp op) {
       if (fir::isTypeWithDescriptor(op.getVarType()) ||
           mlir::isa_and_present<fir::BoxAddrOp>(
               op.getVarPtr().getDefiningOp())) {

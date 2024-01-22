@@ -319,7 +319,7 @@ def LoopVersioning : Pass<"loop-versioning", "mlir::func::FuncOp"> {
 }
 
 def OMPDescriptorMapInfoGenPass
-    : Pass<"omp-descriptor-map-info-gen", "mlir::ModuleOp"> {
+    : Pass<"omp-descriptor-map-info-gen", "mlir::func::FuncOp"> {
   let summary = "expands OpenMP MapInfo operations containing descriptors";
   let description = [{
     Expands MapInfo operations containing descriptor types into multiple 
