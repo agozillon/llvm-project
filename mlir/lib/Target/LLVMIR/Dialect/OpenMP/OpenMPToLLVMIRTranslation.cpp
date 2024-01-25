@@ -1743,13 +1743,16 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
         mapData.BasePointers.push_back(refPtr);
       } else { // regular mapped variable
         mapData.IsDeclareTarget.push_back(false);
-        mapData.BasePointers.push_back(mapData.OriginalValue.back());
+        mapData.BasePointers.push_back(
+            (mapOp.getVarPtrPtr() != mlir::Value())
+                ? moduleTranslation.lookupValue(mapOp.getVarPtrPtr())
+                : mapData.OriginalValue.back());
       }
 
       mapData.BaseType.push_back(
           moduleTranslation.convertType(mapOp.getVarType()));
       mapData.Sizes.push_back(getSizeInBytes(
-          dl, mapOp.getVarType(), mapOp, mapData.BasePointers.back(),
+          dl, mapOp.getVarType(), mapOp, mapData.Pointers.back(),
           mapData.BaseType.back(), builder, moduleTranslation));
       mapData.MapClause.push_back(mapOp.getOperation());
       mapData.Types.push_back(
@@ -1779,6 +1782,15 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
       }
     }
   }
+}
+
+int getMapDataMemberIdx(MapInfoData &mapData, mlir::omp::MapInfoOp memberOp) {
+  int memberDataIdx = -1;
+  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
+    if (mapData.MapClause[i] == memberOp)
+      memberDataIdx = i;
+  }
+  return memberDataIdx;
 }
 
 // This creates two insertions into the MapInfosTy data structure for the
@@ -1869,11 +1881,7 @@ static void processMapMembersWithParent(
   for (auto mappedMembers : parentClause.getMembers()) {
     auto memberClause =
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mappedMembers.getDefiningOp());
-    int memberDataIdx = -1;
-    for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-      if (mapData.MapClause[i] == memberClause)
-        memberDataIdx = i;
-    }
+    int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
 
     assert(memberDataIdx >= 0 && "could not find mapped member of structure");
 
@@ -1944,17 +1952,60 @@ static void processMapMembersWithParent(
   }
 }
 
+static void processIndividualMap(MapInfoData &mapData,
+                                 size_t mapDataIdx,
+                                 llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo,
+                                 bool isTargetParams) {
+    // Declare Target Mappings are excluded from being marked as
+    // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
+    // marked with OMP_MAP_PTR_AND_OBJ instead.
+    auto mapFlag = mapData.Types[mapDataIdx];
+    if (mapData.IsDeclareTarget[mapDataIdx])
+      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+    else if (isTargetParams)
+      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+
+    if (auto mapInfoOp = dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIdx]))
+      if (mapInfoOp.getMapCaptureType().value() ==
+              mlir::omp::VariableCaptureKind::ByCopy &&
+          !mapInfoOp.getVarType().isa<LLVM::LLVMPointerType>())
+        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
+
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIdx]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIdx]);
+    combinedInfo.DevicePointers.emplace_back(mapData.DevicePointers[mapDataIdx]);
+    combinedInfo.Names.emplace_back(mapData.Names[mapDataIdx]);
+    combinedInfo.Types.emplace_back(mapFlag);
+    combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIdx]);
+}
+
 static void processMapWithMembersOf(
     LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
     llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
     llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo, MapInfoData &mapData,
     uint64_t mapDataIndex, bool isTargetParams) {
-  llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
-      mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
-                           combinedInfo, mapData, mapDataIndex, isTargetParams);
-  processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
-                              combinedInfo, mapData, mapDataIndex,
-                              memberOfParentFlag);
+  auto parentClause =
+      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+  // If we have a partial map (no parent referneced in the map clauses of the
+  // directive, only members) and only a single member, we do not need to bind
+  // the map of the member to the parent, we can pass the member seperately.
+  if (parentClause.getMembers().size() == 1 && parentClause.getPartialMap()) {
+      auto memberClause = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+          parentClause.getMembers()[0].getDefiningOp());
+      int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
+      // offload_baseptrs (BasePointers) = the struct alloca/ref to the struct
+      // offload_ptrs (Pointers) = the gep of the member in struct
+      processIndividualMap(mapData, memberDataIdx, combinedInfo,
+                           isTargetParams);
+  } else {
+      llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
+          mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
+                               combinedInfo, mapData, mapDataIndex,
+                               isTargetParams);
+      processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
+                                  combinedInfo, mapData, mapDataIndex,
+                                  memberOfParentFlag);
+  }
 }
 
 // Generate all map related information and fill the combinedInfo.
@@ -1983,12 +2034,8 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
   // utilise the size from any component of MapInfoData, if we can't
   // something is missing from the initial MapInfoData construction.
   for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-    // NOTE/TODO: We currently do not handle member mapping seperately from it's
-    // parent or explicit mapping of a parent and member in the same operation,
-    // this will need to change in the near future, for now we primarily handle
-    // descriptor mapping from fortran, generalised as mapping record types
-    // with implicit member maps. This lowering needs further generalisation to
-    // fully support fortran derived types, and C/C++ structures and classes.
+    // NOTE/TODO: We currently do not support arbitrary depth record
+    // type mapping. 
     if (mapData.IsAMember[i])
       continue;
 
@@ -1999,27 +2046,7 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
       continue;
     }
 
-    // Declare Target Mappings are excluded from being marked as
-    // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
-    // marked with OMP_MAP_PTR_AND_OBJ instead.
-    auto mapFlag = mapData.Types[i];
-    if (mapData.IsDeclareTarget[i])
-      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-    else if (isTargetParams)
-      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
-
-    if (auto mapInfoOp = dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[i]))
-      if (mapInfoOp.getMapCaptureType().value() ==
-              mlir::omp::VariableCaptureKind::ByCopy &&
-          !mapInfoOp.getVarType().isa<LLVM::LLVMPointerType>())
-        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
-
-    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[i]);
-    combinedInfo.Pointers.emplace_back(mapData.Pointers[i]);
-    combinedInfo.DevicePointers.emplace_back(mapData.DevicePointers[i]);
-    combinedInfo.Names.emplace_back(mapData.Names[i]);
-    combinedInfo.Types.emplace_back(mapFlag);
-    combinedInfo.Sizes.emplace_back(mapData.Sizes[i]);
+    processIndividualMap(mapData, i, combinedInfo, isTargetParams);
   }
 
   auto findMapInfo = [&combinedInfo](llvm::Value *val, unsigned &index) {
