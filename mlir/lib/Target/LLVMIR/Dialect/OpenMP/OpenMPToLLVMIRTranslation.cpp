@@ -1841,12 +1841,6 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
       /*isSigned=*/false);
   combinedInfo.Sizes.push_back(size);
 
-  // This creates the initial MEMBER_OF mapping that consists of
-  // the parent/top level container (same as above effectively, except
-  // with a fixed initial compile time size and seperate maptype which
-  // indicates the true mape type (tofrom etc.) and that it is a part
-  // of a larger mapping and indicating the link between it and it's
-  // members that are also explicitly mapped).
   llvm::omp::OpenMPOffloadMappingFlags mapFlag =
       llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
   if (isTargetParams)
@@ -1856,15 +1850,24 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
       ompBuilder.getMemberOfFlag(combinedInfo.BasePointers.size() - 1);
   ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
 
-  combinedInfo.Types.emplace_back(mapFlag);
-  combinedInfo.DevicePointers.emplace_back(
-      llvm::OpenMPIRBuilder::DeviceInfoTy::None);
-  combinedInfo.Names.emplace_back(LLVM::createMappingInformation(
-      mapData.MapClause[mapDataIndex]->getLoc(), ompBuilder));
-  combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
-  combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
-  combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIndex]);
-
+  // This creates the initial MEMBER_OF mapping that consists of
+  // the parent/top level container (same as above effectively, except
+  // with a fixed initial compile time size and seperate maptype which
+  // indicates the true mape type (tofrom etc.). This parent mapping is
+  // only relevant if the structure in it's totality is being mapped,
+  // otherwise the above suffices.
+  auto parentClause =
+      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+  if (!parentClause.getPartialMap()) {
+    combinedInfo.Types.emplace_back(mapFlag);
+    combinedInfo.DevicePointers.emplace_back(
+        llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+    combinedInfo.Names.emplace_back(LLVM::createMappingInformation(
+        mapData.MapClause[mapDataIndex]->getLoc(), ompBuilder));
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
+    combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIndex]);
+  }
   return memberOfFlag;
 }
 
@@ -1886,12 +1889,22 @@ static void processMapMembersWithParent(
     assert(memberDataIdx >= 0 && "could not find mapped member of structure");
 
     // Same MemberOfFlag to indicate its link with parent and other members
-    // of, and we flag that it's part of a pointer and object coupling.
+    // of
     auto mapFlag =
         llvm::omp::OpenMPOffloadMappingFlags(memberClause.getMapType().value());
     mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
     ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
-    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+
+    // We flag that the member is part of a pointer -> pointee coupling and both
+    // need to be mapped.
+    // TODO/FIXME: This is perhaps an inadequate way to set this, this is
+    // perhaps better set by the respective Frontend which will have access
+    // to more information. But for the moment, the only case where this flag
+    // is neccesary that is currently supported is dynamically allocated array
+    // data.
+    if (!memberClause.getBounds().empty())
+      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+
     combinedInfo.Types.emplace_back(mapFlag);
     combinedInfo.DevicePointers.emplace_back(
         llvm::OpenMPIRBuilder::DeviceInfoTy::None);

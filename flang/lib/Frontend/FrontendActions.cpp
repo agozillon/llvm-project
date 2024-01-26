@@ -337,6 +337,7 @@ bool CodeGenAction::beginSourceFileAction() {
     fir::createOpenMPFIRPassPipeline(pm, isDevice);
   }
 
+  // mlirModule->dump();
   pm.enableVerifier(/*verifyPasses=*/true);
   pm.addPass(std::make_unique<Fortran::lower::VerifierPass>());
 

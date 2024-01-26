@@ -1145,11 +1145,15 @@ def DataBoundsOp : OpenMP_Op<"bounds",
   let hasVerifier = 1;
 }
 
+// resolve call sites to use new members, create a custom parser if absolutely 
+// neccesarry
+
 def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
   let arguments = (ins OpenMP_PointerLikeType:$var_ptr,
                        TypeAttr:$var_type,
                        Optional<OpenMP_PointerLikeType>:$var_ptr_ptr,
                        Variadic<OpenMP_PointerLikeType>:$members,
+                       OptionalAttr<I64ArrayAttr>:$members_index,
                        Variadic<DataBoundsType>:$bounds, /* rank-0 to rank-{n-1} */
                        OptionalAttr<UI64Attr>:$map_type,
                        OptionalAttr<VariableCaptureKindAttr>:$map_capture_type,
@@ -1190,10 +1194,14 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
     - `var_type`: The type of the variable to copy.
     - `var_ptr_ptr`: Used when the variable copied is a member of a class, structure
       or derived type and refers to the originating struct.
-    - `members`:  Used to indicate mapped child members for the current MapInfoOp, 
+    - `members`: Used to indicate mapped child members for the current MapInfoOp, 
        represented as other MapInfoOp's, utilised in cases where a parent structure 
        type and members of the structure type are being mapped at the same time. 
-       For example: map(to: parent, parent->member, parent->member2[:10])  
+       For example: map(to: parent, parent->member, parent->member2[:10])
+    - `members_index`: Used to indicate the ordering of members within the containing 
+       parent (generally a record type such as a structure, class or derived type),
+       e.g. struct {int x, float y, double z}, x would be 0, y would be 1, and z 
+       would be 2. This aids the mapping 
     - `bounds`: Used when copying slices of array's, pointers or pointer members of
        objects (e.g. derived types or classes), indicates the bounds to be copied
        of the variable. When it's an array slice it is in rank order where rank 0
@@ -1214,7 +1222,7 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
         `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
       | `map_clauses` `(` custom<MapClause>($map_type) `)`
       | `capture` `(` custom<CaptureType>($map_capture_type) `)`
-      | `members` `(` $members `:` type($members) `)`
+      | `members` `(` $members `:` type($members) `:` $members_index `)`
       | `bounds` `(` $bounds `)`
     ) `->` type($omp_ptr) attr-dict
   }];
