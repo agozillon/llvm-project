@@ -338,6 +338,7 @@ bool CodeGenAction::beginSourceFileAction() {
   }
 
   // mlirModule->dump();
+
   pm.enableVerifier(/*verifyPasses=*/true);
   pm.addPass(std::make_unique<Fortran::lower::VerifierPass>());
 

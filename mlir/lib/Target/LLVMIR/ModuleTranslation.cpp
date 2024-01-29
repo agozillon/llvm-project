@@ -1597,7 +1597,7 @@ mlir::translateModuleToLLVMIR(Operation *module, llvm::LLVMContext &llvmContext,
   if (failed(translator.createTBAAMetadata()))
     return nullptr;
 
-  module->dump();
+  // module->dump();
 
   // Convert other top-level operations if possible.
   for (Operation &o : getModuleBody(module).getOperations()) {
@@ -1615,7 +1615,7 @@ mlir::translateModuleToLLVMIR(Operation *module, llvm::LLVMContext &llvmContext,
   if (failed(translator.convertFunctions()))
     return nullptr;
 
-  // translator.llvmModule->dump();
+  translator.llvmModule->dump();
 
   if (llvm::verifyModule(*translator.llvmModule, &llvm::errs()))
     return nullptr;
