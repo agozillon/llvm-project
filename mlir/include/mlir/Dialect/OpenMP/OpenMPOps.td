@@ -1145,9 +1145,6 @@ def DataBoundsOp : OpenMP_Op<"bounds",
   let hasVerifier = 1;
 }
 
-// resolve call sites to use new members, create a custom parser if absolutely 
-// neccesarry
-
 def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
   let arguments = (ins OpenMP_PointerLikeType:$var_ptr,
                        TypeAttr:$var_type,

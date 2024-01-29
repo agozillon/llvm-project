@@ -82,7 +82,8 @@ class OMPDescriptorMapInfoGenPass
         mlir::TypeAttr::get(llvm::cast<mlir::omp::PointerLikeType>(
                                 fir::unwrapRefType(baseAddrAddr.getType()))
                                 .getElementType()),
-        mlir::Value{}, mlir::SmallVector<mlir::Value>{}, op.getBounds(),
+        mlir::Value{}, mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
+        op.getBounds(),
         builder.getIntegerAttr(builder.getIntegerType(64, false),
                                op.getMapType().value()),
         builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
@@ -120,6 +121,8 @@ class OMPDescriptorMapInfoGenPass
         op->getLoc(), op.getResult().getType(), descriptor,
         mlir::TypeAttr::get(fir::unwrapRefType(descriptor.getType())),
         mlir::Value{}, mlir::SmallVector<mlir::Value>{baseAddr},
+        mlir::ArrayAttr::get(builder.getContext(),
+                             builder.getI64IntegerAttr(0)) /*members_index*/,
         mlir::SmallVector<mlir::Value>{},
         builder.getIntegerAttr(builder.getIntegerType(64, false),
                                op.getMapType().value()),
@@ -220,12 +223,11 @@ class OMPDescriptorMapInfoGenPass
              "OMPDescriptorMapInfoGen currently only supports single users "
              "of a MapInfoOp");
 
-      if (!op.getMembers().empty())
+      if (!op.getMembers().empty()) {
         addImplicitMembersToTarget(op, builder, *op->getUsers().begin());
-
-      if (fir::isTypeWithDescriptor(op.getVarType()) ||
-          mlir::isa_and_present<fir::BoxAddrOp>(
-              op.getVarPtr().getDefiningOp())) {
+      } else if (fir::isTypeWithDescriptor(op.getVarType()) ||
+                 mlir::isa_and_present<fir::BoxAddrOp>(
+                     op.getVarPtr().getDefiningOp())) {
         builder.setInsertionPoint(op);
         genDescriptorMemberMaps(op, builder, *op->getUsers().begin());
       }

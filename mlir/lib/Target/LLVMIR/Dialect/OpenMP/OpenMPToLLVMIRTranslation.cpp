@@ -1793,6 +1793,34 @@ int getMapDataMemberIdx(MapInfoData &mapData, mlir::omp::MapInfoOp memberOp) {
   return memberDataIdx;
 }
 
+mlir::omp::MapInfoOp getLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo) {
+  // Only 1 member has been mapped, we can return it.
+  if (mapInfo.getMembersIndex()->size() == 1)
+    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+            mapInfo.getMembers()[0].getDefiningOp()))
+      return mapOp;
+
+  int64_t curLastPos =
+      mapInfo.getMembersIndex()->begin()->cast<mlir::IntegerAttr>().getInt();
+
+  int64_t idx = 1, curLastIdx = 0, memberPlacement = 0;
+  for (const auto *iter = std::next(mapInfo.getMembersIndex()->begin());
+       iter != mapInfo.getMembersIndex()->end(); iter++) {
+    memberPlacement = iter->cast<mlir::IntegerAttr>().getInt();
+    if (memberPlacement > curLastPos) {
+      curLastIdx = idx;
+      curLastPos = memberPlacement;
+    }
+    idx++;
+  }
+
+  if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+          mapInfo.getMembers()[curLastIdx].getDefiningOp()))
+    return mapOp;
+
+  return {};
+}
+
 // This creates two insertions into the MapInfosTy data structure for the
 // "parent" of a set of members, (usually a container e.g.
 // class/structure/derived type) when subsequent members have also been
@@ -1829,17 +1857,38 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   // Fortran pointers and allocatables, the mapping of the pointed to
   // data by the descriptor (which itself, is a structure containing
   // runtime information on the dynamically allocated data).
-  llvm::Value *lowAddr = builder.CreatePointerCast(
-      mapData.Pointers[mapDataIndex], builder.getPtrTy());
-  llvm::Value *highAddr = builder.CreatePointerCast(
-      builder.CreateConstGEP1_32(mapData.BaseType[mapDataIndex],
-                                 mapData.Pointers[mapDataIndex], 1),
-      builder.getPtrTy());
-  llvm::Value *size = builder.CreateIntCast(
-      builder.CreatePtrDiff(builder.getInt8Ty(), highAddr, lowAddr),
-      builder.getInt64Ty(),
-      /*isSigned=*/false);
-  combinedInfo.Sizes.push_back(size);
+  auto parentClause =
+      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+
+  // TODO: Perhaps find a way to not lean on the partial map flag here.
+  if (!parentClause.getPartialMap()) {
+    llvm::Value *lowAddr = builder.CreatePointerCast(
+        mapData.Pointers[mapDataIndex], builder.getPtrTy());
+    llvm::Value *highAddr = builder.CreatePointerCast(
+        builder.CreateConstGEP1_32(mapData.BaseType[mapDataIndex],
+                                   mapData.Pointers[mapDataIndex], 1),
+        builder.getPtrTy());
+    llvm::Value *size = builder.CreateIntCast(
+        builder.CreatePtrDiff(builder.getInt8Ty(), highAddr, lowAddr),
+        builder.getInt64Ty(),
+        /*isSigned=*/false);
+    combinedInfo.Sizes.push_back(size);
+  } else {
+    auto mapOp =
+        mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+    llvm::Value *lowAddr = builder.CreatePointerCast(
+        mapData.Pointers[mapDataIndex], builder.getPtrTy());
+    int memberIdx = getMapDataMemberIdx(mapData, getLastMappedMemberPtr(mapOp));
+    llvm::Value *highAddr = builder.CreatePointerCast(
+        builder.CreateGEP(mapData.BaseType[memberIdx],
+                          mapData.Pointers[memberIdx], builder.getInt64(1)),
+        builder.getPtrTy());
+    llvm::Value *size = builder.CreateIntCast(
+        builder.CreatePtrDiff(builder.getInt8Ty(), highAddr, lowAddr),
+        builder.getInt64Ty(),
+        /*isSigned=*/false);
+    combinedInfo.Sizes.push_back(size);
+  }
 
   llvm::omp::OpenMPOffloadMappingFlags mapFlag =
       llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
@@ -1856,8 +1905,6 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   // indicates the true mape type (tofrom etc.). This parent mapping is
   // only relevant if the structure in it's totality is being mapped,
   // otherwise the above suffices.
-  auto parentClause =
-      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
   if (!parentClause.getPartialMap()) {
     combinedInfo.Types.emplace_back(mapFlag);
     combinedInfo.DevicePointers.emplace_back(
@@ -1954,13 +2001,33 @@ static void processMapMembersWithParent(
       }
     }
 
-    llvm::Value *memberIdx =
-        builder.CreateLoad(builder.getPtrTy(), mapData.Pointers[memberDataIdx]);
-    memberIdx = builder.CreateInBoundsGEP(
-        mapData.BaseType[memberDataIdx], memberIdx,
-        offsetAddress ? std::vector<llvm::Value *>{offsetAddress} : idx,
-        "member_idx");
-    combinedInfo.Pointers.emplace_back(memberIdx);
+    // 5) Make a basic test or two for this
+    // 6) Try it with an array inside of 1-depth
+    // 7) Try it with an allocatable
+    // 8) test mutliple structs explcit elements being mapped
+    // 9) If they don't work, don't focus on them too hard, aim to cover the
+    // other case where we
+    //     map an entire derived type + explicit members, to see if it conflicts
+    //     with the descriptor mapping in someway or we can keep it similar to
+    //     the descriptors for Flang (verify again what Clang actually does in
+    //     this case, I don't remember it doing what it does now, this may
+    // be because of the changes Doru made, if it works for us with the method
+    // of mapping the struct and then individual members, then that should be
+    // fine...)
+    // 10) Perhaps refactor some of the specialisations in this function...
+
+    if (!memberClause.getBounds().empty()) {
+      llvm::Value *memberIdx = builder.CreateLoad(
+          builder.getPtrTy(), mapData.Pointers[memberDataIdx]);
+      memberIdx = builder.CreateInBoundsGEP(
+          mapData.BaseType[memberDataIdx], memberIdx,
+          offsetAddress ? std::vector<llvm::Value *>{offsetAddress} : idx,
+          "member_idx");
+      combinedInfo.Pointers.emplace_back(memberIdx);
+    } else {
+      combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
+    }
+
     combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
 }
