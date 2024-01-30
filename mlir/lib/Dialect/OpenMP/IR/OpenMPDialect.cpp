@@ -931,6 +931,8 @@ static LogicalResult verifyMapClause(Operation *op, OperandRange mapOperands) {
         }
 
         auto updateVar = mapInfoOp.getVarPtr();
+        if (!updateVar)
+          updateVar = mapInfoOp.getVarPtrPtr();
 
         if ((to && from) || (to && updateFromVars.contains(updateVar)) ||
             (from && updateToVars.contains(updateVar))) {
@@ -1575,6 +1577,32 @@ LogicalResult DataBoundsOp::verify() {
   auto upperbound = getUpperBound();
   if (!extent && !upperbound)
     return emitError("expected extent or upperbound.");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// MapInfoOp
+//===----------------------------------------------------------------------===//
+
+// Handles basic verification of the MapInfoOp to check that it has been created
+// correctly, more complex verification that depends on operations the MapInfoOp
+// is tied to is handled inside of VerifyMapClause
+LogicalResult MapInfoOp::verify() {
+  auto varPtr = getVarPtr();
+  auto varPtrPtr = getVarPtrPtr();
+  auto varPtrTy = getVarPtrType();
+  auto varPtrPtrTy = getVarPtrPtrType();
+
+  if (!varPtr && !varPtrPtr)
+    return emitError("expected at least one of var_ptr or var_ptr_ptr.");
+
+  if (varPtr && !varPtrTy)
+    return emitError("expected a var_ptr_type as var_ptr has been specified.");
+
+  if (varPtrPtr && !varPtrPtrTy)
+    return emitError(
+        "expected a var_ptr_ptr_type as var_ptr_ptr has been specified.");
+
   return success();
 }
 

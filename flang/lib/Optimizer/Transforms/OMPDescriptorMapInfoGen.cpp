@@ -50,7 +50,7 @@ class OMPDescriptorMapInfoGenPass
     // If we enter this function, but the mapped type itself is not the
     // descriptor, then it's likely the address of the descriptor so we
     // must retrieve the descriptor SSA.
-    if (!fir::isTypeWithDescriptor(op.getVarType())) {
+    if (!fir::isTypeWithDescriptor(op.getVarPtrType().value())) {
       if (auto addrOp = mlir::dyn_cast_if_present<fir::BoxAddrOp>(
               op.getVarPtr().getDefiningOp())) {
         descriptor = addrOp.getVal();
@@ -78,11 +78,12 @@ class OMPDescriptorMapInfoGenPass
 
     // Member of the descriptor pointing at the allocated data
     mlir::Value baseAddr = builder.create<mlir::omp::MapInfoOp>(
-        loc, baseAddrAddr.getType(), baseAddrAddr,
+        loc, baseAddrAddr.getType(), mlir::Value{}, mlir::TypeAttr{},
+        baseAddrAddr,
         mlir::TypeAttr::get(llvm::cast<mlir::omp::PointerLikeType>(
                                 fir::unwrapRefType(baseAddrAddr.getType()))
                                 .getElementType()),
-        mlir::Value{}, mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
+        mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
         op.getBounds(),
         builder.getIntegerAttr(builder.getIntegerType(64, false),
                                op.getMapType().value()),
@@ -120,7 +121,7 @@ class OMPDescriptorMapInfoGenPass
     mlir::Value newDescParentMapOp = builder.create<mlir::omp::MapInfoOp>(
         op->getLoc(), op.getResult().getType(), descriptor,
         mlir::TypeAttr::get(fir::unwrapRefType(descriptor.getType())),
-        mlir::Value{}, mlir::SmallVector<mlir::Value>{baseAddr},
+        mlir::Value{}, mlir::TypeAttr{}, mlir::SmallVector<mlir::Value>{baseAddr},
         mlir::ArrayAttr::get(builder.getContext(),
                              builder.getI64IntegerAttr(0)) /*members_index*/,
         mlir::SmallVector<mlir::Value>{},
@@ -225,7 +226,8 @@ class OMPDescriptorMapInfoGenPass
 
       if (!op.getMembers().empty()) {
         addImplicitMembersToTarget(op, builder, *op->getUsers().begin());
-      } else if (fir::isTypeWithDescriptor(op.getVarType()) ||
+      } else if ((op.getVarPtr() && op.getVarPtrType().has_value()) &&
+                 fir::isTypeWithDescriptor(op.getVarPtrType().value()) ||
                  mlir::isa_and_present<fir::BoxAddrOp>(
                      op.getVarPtr().getDefiningOp())) {
         builder.setInsertionPoint(op);

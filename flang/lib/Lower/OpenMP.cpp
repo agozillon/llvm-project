@@ -1831,11 +1831,17 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
     retTy = baseAddr.getType();
   }
 
-  mlir::TypeAttr varType = mlir::TypeAttr::get(
+  mlir::TypeAttr varPtrType = mlir::TypeAttr::get(
       llvm::cast<mlir::omp::PointerLikeType>(retTy).getElementType());
 
+  mlir::TypeAttr varPtrPtrType = mlir::TypeAttr();
+  if (varPtrPtr)
+    varPtrPtrType = mlir::TypeAttr::get(
+        llvm::cast<mlir::omp::PointerLikeType>(varPtrPtr.getType())
+            .getElementType());
+
   mlir::omp::MapInfoOp op = builder.create<mlir::omp::MapInfoOp>(
-      loc, retTy, baseAddr, varType, varPtrPtr, members, membersIndex, bounds,
+      loc, retTy, baseAddr, varPtrType, varPtrPtr, varPtrPtrType, members, membersIndex, bounds,
       builder.getIntegerAttr(builder.getIntegerType(64, false), mapType),
       builder.getAttr<mlir::omp::VariableCaptureKindAttr>(mapCaptureType),
       builder.getStringAttr(name), builder.getBoolAttr(partialMap));
