@@ -1899,6 +1899,23 @@ mlir::Value getFirstMappedMemberPtr(mlir::omp::MapInfoOp mapInfo) {
   return {};
 }
 
+static void
+checkAndApplyDeclTargetMapFlags(Fortran::lower::AbstractConverter &converter,
+                                llvm::omp::OpenMPOffloadMappingFlags &mapFlags,
+                                Fortran::semantics::Symbol* symbol) {
+  mlir::Operation *op =
+      converter.getModuleOp().lookupSymbol(converter.mangleName(*symbol));
+  if (op)
+    if (auto declareTargetOp =
+            llvm::dyn_cast<mlir::omp::DeclareTargetInterface>(op)) {
+      // only Link clauses have OMP_MAP_PTR_AND_OBJ applied, To clause
+      // functions fairly different.
+      if (declareTargetOp.getDeclareTargetCaptureClause() ==
+          mlir::omp::DeclareTargetCaptureClause::link)
+        mapFlags |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+    }
+}
+
 bool ClauseProcessor::processMap(
     mlir::Location currentLocation, const llvm::omp::Directive &directive,
     Fortran::semantics::SemanticsContext &semanticsContext,
@@ -1961,6 +1978,10 @@ bool ClauseProcessor::processMap(
 
         for (const Fortran::parser::OmpObject &ompObject :
              std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {
+          llvm::omp::OpenMPOffloadMappingFlags objectsMapTypeBits = mapTypeBits;
+          checkAndApplyDeclTargetMapFlags(converter, objectsMapTypeBits,
+                                          getOmpObjectSymbol(ompObject));
+
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
           mlir::Value varPtrPtr;
@@ -1997,7 +2018,7 @@ bool ClauseProcessor::processMap(
               bounds, {}, mlir::ArrayAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-                  mapTypeBits),
+                  objectsMapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
           if (parentSym) {
