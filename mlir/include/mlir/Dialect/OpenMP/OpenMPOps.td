@@ -1146,10 +1146,9 @@ def DataBoundsOp : OpenMP_Op<"bounds",
 }
 
 def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
-  let arguments = (ins Optional<OpenMP_PointerLikeType>:$var_ptr,
-                       OptionalAttr<TypeAttr>:$var_ptr_type,
+  let arguments = (ins OpenMP_PointerLikeType:$var_ptr,
+                       TypeAttr:$var_type,
                        Optional<OpenMP_PointerLikeType>:$var_ptr_ptr,
-                       OptionalAttr<TypeAttr>:$var_ptr_ptr_type,
                        Variadic<OpenMP_PointerLikeType>:$members,
                        OptionalAttr<I64ArrayAttr>:$members_index,
                        Variadic<DataBoundsType>:$bounds, /* rank-0 to rank-{n-1} */
@@ -1189,10 +1188,9 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
 
     Description of arguments:
     - `var_ptr`: The address of variable to copy.
-    - `var_ptr_type`: The type of the variable to copy.
+    - `var_type`: The type of the variable to copy.
     - `var_ptr_ptr`: Used when the variable copied is a member of a class, structure
       or derived type and refers to the originating struct.
-    - `var_ptr_ptr_type`: The underyling type of var_ptr_ptr
     - `members`: Used to indicate mapped child members for the current MapInfoOp, 
        represented as other MapInfoOp's, utilised in cases where a parent structure 
        type and members of the structure type are being mapped at the same time. 
@@ -1216,9 +1214,9 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
   }];
 
   let assemblyFormat = [{
+    `var_ptr` `(` $var_ptr `:` type($var_ptr) `,` $var_type `)`
     oilist(
-      `var_ptr` `(` $var_ptr `:` type($var_ptr) `,` $var_ptr_type `)`
-      | `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `,` $var_ptr_ptr_type `)`
+        `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
       | `map_clauses` `(` custom<MapClause>($map_type) `)`
       | `capture` `(` custom<CaptureType>($map_capture_type) `)`
       | `members` `(` $members `:` type($members) `:` $members_index `)`
@@ -1237,8 +1235,6 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
       return getOperands()[i];
     }
   }];
-
-  let hasVerifier = 1;
 }
 
 //===---------------------------------------------------------------------===//

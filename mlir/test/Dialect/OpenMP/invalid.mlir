@@ -1625,30 +1625,6 @@ func.func @omp_target(%map1: memref<?xi32>) {
 
 // -----
 
-func.func @omp_map_info_op_var_ptr_ty(%map1: memref<?xi32>) {
-  // expected-error @below {{expected a var_ptr_type as var_ptr has been specified.}}
-  %mapv = omp.map_info var_ptr(%map1 : memref<?xi32>, )  map_clauses(tofrom) capture(ByRef) -> memref<?xi32> {name = ""}
-  return
-}
-
-// -----
-
-func.func @omp_omp_map_info_op_var_ptr_ptr_ty(%map1: memref<?xi32>) {
-  // expected-error @below {{expected a var_ptr_ptr_type as var_ptr_ptr has been specified.}}
-  %mapv = omp.map_info var_ptr_ptr(%map1 : memref<?xi32>, )  map_clauses(tofrom) capture(ByRef) -> memref<?xi32> {name = ""}
-  return
-}
-
-// -----
-
-func.func @omp_omp_map_info_op_no_ptrs(%map1: memref<?xi32>) {
-  // expected-error @below {{expected at least one of var_ptr or var_ptr_ptr.}}
-  %mapv = omp.map_info  map_clauses(tofrom) capture(ByRef) -> memref<?xi32> {name = ""}
-  return
-}
-
-// -----
-
 func.func @omp_target_data(%map1: memref<?xi32>) {
   %mapv = omp.map_info var_ptr(%map1 : memref<?xi32>, tensor<?xi32>)  map_clauses(delete) capture(ByRef) -> memref<?xi32> {name = ""}
   // expected-error @below {{to, from, tofrom and alloc map types are permitted}}
