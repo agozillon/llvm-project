@@ -1798,7 +1798,8 @@ void collectMapDataFromMapOperands(MapInfoData &mapData,
   }
 }
 
-int getMapDataMemberIdx(MapInfoData &mapData, mlir::omp::MapInfoOp memberOp) {
+static int getMapDataMemberIdx(MapInfoData &mapData,
+                               mlir::omp::MapInfoOp memberOp) {
   int memberDataIdx = -1;
   for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
     if (mapData.MapClause[i] == memberOp)
@@ -1807,32 +1808,86 @@ int getMapDataMemberIdx(MapInfoData &mapData, mlir::omp::MapInfoOp memberOp) {
   return memberDataIdx;
 }
 
-mlir::omp::MapInfoOp getLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo) {
+static mlir::omp::MapInfoOp
+getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
   // Only 1 member has been mapped, we can return it.
   if (mapInfo.getMembersIndex()->size() == 1)
     if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
             mapInfo.getMembers()[0].getDefiningOp()))
       return mapOp;
 
-  int64_t curLastPos =
+  int64_t curPos =
       mapInfo.getMembersIndex()->begin()->cast<mlir::IntegerAttr>().getInt();
 
-  int64_t idx = 1, curLastIdx = 0, memberPlacement = 0;
+  int64_t idx = 1, curIdx = 0, memberPlacement = 0;
   for (const auto *iter = std::next(mapInfo.getMembersIndex()->begin());
        iter != mapInfo.getMembersIndex()->end(); iter++) {
     memberPlacement = iter->cast<mlir::IntegerAttr>().getInt();
-    if (memberPlacement > curLastPos) {
-      curLastIdx = idx;
-      curLastPos = memberPlacement;
+    if (first) {
+      if (memberPlacement < curPos) {
+        curIdx = idx;
+        curPos = memberPlacement;
+      }
+    } else {
+      if (memberPlacement > curPos) {
+        curIdx = idx;
+        curPos = memberPlacement;
+      }
     }
     idx++;
   }
 
   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapInfo.getMembers()[curLastIdx].getDefiningOp()))
+          mapInfo.getMembers()[curIdx].getDefiningOp()))
     return mapOp;
 
   return {};
+}
+
+std::vector<llvm::Value *>
+calculateBoundsOffset(LLVM::ModuleTranslation &moduleTranslation,
+                      llvm::IRBuilderBase &builder, bool isArrayTy,
+                      mlir::OperandRange bounds) {
+  std::vector<llvm::Value *> idx;
+  llvm::Value *offsetAddress = nullptr;
+  if (!bounds.empty()) {
+    idx.push_back(builder.getInt64(0));
+    if (isArrayTy) {
+      for (int i = bounds.size() - 1; i >= 0; --i) {
+        if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                bounds[i].getDefiningOp())) {
+          idx.push_back(moduleTranslation.lookupValue(boundOp.getLowerBound()));
+        }
+      }
+    } else {
+      std::vector<llvm::Value *> dimensionIndexSizeOffset{builder.getInt64(1)};
+      for (size_t i = 1; i < bounds.size(); ++i) {
+        if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                bounds[i].getDefiningOp())) {
+          dimensionIndexSizeOffset.push_back(builder.CreateMul(
+              moduleTranslation.lookupValue(boundOp.getExtent()),
+              dimensionIndexSizeOffset[i - 1]));
+        }
+      }
+
+      for (int i = bounds.size() - 1; i >= 0; --i) {
+        if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+                bounds[i].getDefiningOp())) {
+          if (!offsetAddress)
+            offsetAddress = builder.CreateMul(
+                moduleTranslation.lookupValue(boundOp.getLowerBound()),
+                dimensionIndexSizeOffset[i]);
+          else
+            offsetAddress = builder.CreateAdd(
+                offsetAddress, builder.CreateMul(moduleTranslation.lookupValue(
+                                                     boundOp.getLowerBound()),
+                                                 dimensionIndexSizeOffset[i]));
+        }
+      }
+    }
+  }
+
+  return offsetAddress ? std::vector<llvm::Value *>{offsetAddress} : idx;
 }
 
 // This creates two insertions into the MapInfosTy data structure for the
@@ -1862,7 +1917,6 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   combinedInfo.Names.emplace_back(LLVM::createMappingInformation(
       mapData.MapClause[mapDataIndex]->getLoc(), ompBuilder));
   combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
-  combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
 
   // Calculate size of the parent object being mapped based on the
   // addresses at runtime, highAddr - lowAddr = size. This of course
@@ -1874,39 +1928,40 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   auto parentClause =
       mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
 
-  // TODO: Perhaps find a way to not lean on the partial map flag here.
+  llvm::Value *lowAddr, *highAddr;
   if (!parentClause.getPartialMap()) {
-    llvm::Value *lowAddr = builder.CreatePointerCast(
-        mapData.Pointers[mapDataIndex], builder.getPtrTy());
-    llvm::Value *highAddr = builder.CreatePointerCast(
+    lowAddr = builder.CreatePointerCast(mapData.Pointers[mapDataIndex],
+                                        builder.getPtrTy());
+    highAddr = builder.CreatePointerCast(
         builder.CreateConstGEP1_32(mapData.PtrType[mapDataIndex],
                                    mapData.Pointers[mapDataIndex], 1),
         builder.getPtrTy());
-    llvm::Value *size = builder.CreateIntCast(
-        builder.CreatePtrDiff(builder.getInt8Ty(), highAddr, lowAddr),
-        builder.getInt64Ty(),
-        /*isSigned=*/false);
-    combinedInfo.Sizes.push_back(size);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
   } else {
     auto mapOp =
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
-    llvm::Value *lowAddr = builder.CreatePointerCast(
-        mapData.Pointers[mapDataIndex], builder.getPtrTy());
-    int memberIdx = getMapDataMemberIdx(mapData, getLastMappedMemberPtr(mapOp));
-    llvm::Value *highAddr = builder.CreatePointerCast(
-        builder.CreateGEP(mapData.PtrType[memberIdx],
-                          mapData.Pointers[memberIdx], builder.getInt64(1)),
+    int firstMemberIdx = getMapDataMemberIdx(
+        mapData, getFirstOrLastMappedMemberPtr(mapOp, true));
+    lowAddr = builder.CreatePointerCast(mapData.Pointers[firstMemberIdx],
+                                        builder.getPtrTy());
+    int lastMemberIdx = getMapDataMemberIdx(
+        mapData, getFirstOrLastMappedMemberPtr(mapOp, false));
+    highAddr = builder.CreatePointerCast(
+        builder.CreateGEP(mapData.PtrType[lastMemberIdx],
+                          mapData.Pointers[lastMemberIdx], builder.getInt64(1)),
         builder.getPtrTy());
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[firstMemberIdx]);
+  }
+
     llvm::Value *size = builder.CreateIntCast(
         builder.CreatePtrDiff(builder.getInt8Ty(), highAddr, lowAddr),
         builder.getInt64Ty(),
         /*isSigned=*/false);
     combinedInfo.Sizes.push_back(size);
-  }
 
-  llvm::omp::OpenMPOffloadMappingFlags mapFlag =
-      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-  if (isTargetParams)
+    llvm::omp::OpenMPOffloadMappingFlags mapFlag =
+        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+    if (isTargetParams)
     mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
 
   llvm::omp::OpenMPOffloadMappingFlags memberOfFlag =
@@ -1956,92 +2011,13 @@ static void processMapMembersWithParent(
     mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
     ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
 
-    // We flag that the member is part of a pointer -> pointee coupling and both
-    // need to be mapped.
-    // TODO/FIXME: This is perhaps an inadequate way to set this, this is
-    // perhaps better set by the respective Frontend which will have access
-    // to more information. But for the moment, the only case where this flag
-    // is neccesary that is currently supported is dynamically allocated array
-    // data.
-    if (!memberClause.getBounds().empty())
-      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-
     combinedInfo.Types.emplace_back(mapFlag);
     combinedInfo.DevicePointers.emplace_back(
         llvm::OpenMPIRBuilder::DeviceInfoTy::None);
     combinedInfo.Names.emplace_back(
         LLVM::createMappingInformation(memberClause.getLoc(), ompBuilder));
-
-    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
-
-    std::vector<llvm::Value *> idx{builder.getInt64(0)};
-    llvm::Value *offsetAddress = nullptr;
-    if (!memberClause.getBounds().empty()) {
-      if (mapData.BasePtrType[memberDataIdx]->isArrayTy()) {
-        for (int i = memberClause.getBounds().size() - 1; i >= 0; --i) {
-          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
-                  memberClause.getBounds()[i].getDefiningOp())) {
-            idx.push_back(
-                moduleTranslation.lookupValue(boundOp.getLowerBound()));
-          }
-        }
-      } else {
-        std::vector<llvm::Value *> dimensionIndexSizeOffset{
-            builder.getInt64(1)};
-        for (size_t i = 1; i < memberClause.getBounds().size(); ++i) {
-          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
-                  memberClause.getBounds()[i].getDefiningOp())) {
-            dimensionIndexSizeOffset.push_back(builder.CreateMul(
-                moduleTranslation.lookupValue(boundOp.getExtent()),
-                dimensionIndexSizeOffset[i - 1]));
-          }
-        }
-
-        for (int i = memberClause.getBounds().size() - 1; i >= 0; --i) {
-          if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
-                  memberClause.getBounds()[i].getDefiningOp())) {
-            if (!offsetAddress)
-              offsetAddress = builder.CreateMul(
-                  moduleTranslation.lookupValue(boundOp.getLowerBound()),
-                  dimensionIndexSizeOffset[i]);
-            else
-              offsetAddress = builder.CreateAdd(
-                  offsetAddress,
-                  builder.CreateMul(
-                      moduleTranslation.lookupValue(boundOp.getLowerBound()),
-                      dimensionIndexSizeOffset[i]));
-          }
-        }
-      }
-    }
-
-    // 5) Make a basic test or two for this
-    // 6) Try it with an array inside of 1-depth
-    // 7) Try it with an allocatable
-    // 8) test mutliple structs explcit elements being mapped
-    // 9) If they don't work, don't focus on them too hard, aim to cover the
-    // other case where we
-    //     map an entire derived type + explicit members, to see if it conflicts
-    //     with the descriptor mapping in someway or we can keep it similar to
-    //     the descriptors for Flang (verify again what Clang actually does in
-    //     this case, I don't remember it doing what it does now, this may
-    // be because of the changes Doru made, if it works for us with the method
-    // of mapping the struct and then individual members, then that should be
-    // fine...)
-    // 10) Perhaps refactor some of the specialisations in this function...
-
-    if (!memberClause.getBounds().empty()) {
-      llvm::Value *memberIdx = builder.CreateLoad(
-          builder.getPtrTy(), mapData.Pointers[memberDataIdx]);
-      memberIdx = builder.CreateInBoundsGEP(
-          mapData.BasePtrType[memberDataIdx], memberIdx,
-          offsetAddress ? std::vector<llvm::Value *>{offsetAddress} : idx,
-          "member_idx");
-      combinedInfo.Pointers.emplace_back(memberIdx);
-    } else {
-      combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
-    }
-
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
     combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
 }
@@ -2054,16 +2030,15 @@ static void processIndividualMap(MapInfoData &mapData,
     // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
     // marked with OMP_MAP_PTR_AND_OBJ instead.
     auto mapFlag = mapData.Types[mapDataIdx];
-    if (mapData.IsDeclareTarget[mapDataIdx])
-      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-    else if (isTargetParams)
-      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+    if (isTargetParams && !mapData.IsDeclareTarget[mapDataIdx])
+    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
 
-    if (auto mapInfoOp = dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIdx]))
-      if (mapInfoOp.getMapCaptureType().value() ==
-              mlir::omp::VariableCaptureKind::ByCopy &&
-          !mapData.PtrType[mapDataIdx]->isPointerTy())
-        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
+    if (auto mapInfoOp =
+            dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIdx]))
+    if (mapInfoOp.getMapCaptureType().value() ==
+            mlir::omp::VariableCaptureKind::ByCopy &&
+        !mapData.PtrType[mapDataIdx]->isPointerTy())
+      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
 
     combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIdx]);
     combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIdx]);
@@ -2102,6 +2077,90 @@ static void processMapWithMembersOf(
   }
 }
 
+// This is a variation on Clang's GenerateOpenMPCapturedVars, which
+// generates different operation (e.g. load/store) combinations for
+// arguments to the kernel, based on map capture kinds which are then
+// utilised in the combinedInfo in place of the original Map value.
+static void
+createAlteredByCaptureMap(MapInfoData &mapData,
+                          LLVM::ModuleTranslation &moduleTranslation,
+                          llvm::IRBuilderBase &builder) {
+  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
+      // if it's declare target, skip it, it's handled seperately.
+      if (!mapData.IsDeclareTarget[i]) {
+        mlir::omp::VariableCaptureKind captureKind =
+            mlir::omp::VariableCaptureKind::ByRef;
+
+        auto mapOp = mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(
+            mapData.MapClause[i]);
+        captureKind = mapOp.getMapCaptureType().value_or(
+            mlir::omp::VariableCaptureKind::ByRef);
+
+        // NOTE: This may be a bit of a naive check, the intent is
+        // to verify if the mapped data being passed is a pointer -> pointee
+        // type and the data needs loading before we perform a GEP. There may
+        // be a better way to verify this, but unfortunately with opaque
+        // pointers we lose the ability to easily check if something is a
+        // pointer whilst maintaining access to the underlying type.
+        auto mapFlag =
+            llvm::omp::OpenMPOffloadMappingFlags(mapOp.getMapType().value());
+        bool isPtrTy =
+            static_cast<
+                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+                mapFlag &
+                llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ) != 0;
+
+        // Currently handles array sectioning lowerbound case, but more
+        // logic may be required in the future. Clang invokes EmitLValue,
+        // which has specialised logic for special Clang types such as user
+        // defines, so it is possible we will have to extend this for
+        // structures or other complex types. As the general idea is that this
+        // function mimics some of the logic from Clang that we require for
+        // kernel argument passing from host -> device.
+        switch (captureKind) {
+        case mlir::omp::VariableCaptureKind::ByRef: {
+        llvm::Value *newV = mapData.Pointers[i];
+        std::vector<llvm::Value *> offsetIdx = calculateBoundsOffset(
+            moduleTranslation, builder, mapData.PtrType[i]->isArrayTy(),
+            mapOp.getBounds());
+        if (isPtrTy)
+          newV = builder.CreateLoad(builder.getPtrTy(), newV);
+
+        if (!offsetIdx.empty())
+          newV = builder.CreateInBoundsGEP(mapData.PtrType[i], newV, offsetIdx,
+                                           "array_offset");
+        mapData.Pointers[i] = newV;
+        } break;
+        case mlir::omp::VariableCaptureKind::ByCopy: {
+        llvm::Value *newV;
+        if (mapData.Pointers[i]->getType()->isPointerTy())
+          newV = builder.CreateLoad(mapData.PtrType[i], mapData.Pointers[i]);
+        else
+          newV = mapData.Pointers[i];
+
+        if (!isPtrTy) {
+          auto curInsert = builder.saveIP();
+          builder.restoreIP(findAllocaInsertPoint(builder, moduleTranslation));
+          auto *memTempAlloc =
+              builder.CreateAlloca(builder.getPtrTy(), nullptr, ".casted");
+          builder.restoreIP(curInsert);
+
+          builder.CreateStore(newV, memTempAlloc);
+          newV = builder.CreateLoad(builder.getPtrTy(), memTempAlloc);
+        }
+
+        mapData.Pointers[i] = newV;
+        mapData.BasePointers[i] = newV;
+        } break;
+        case mlir::omp::VariableCaptureKind::This:
+        case mlir::omp::VariableCaptureKind::VLAType:
+        mapData.MapClause[i]->emitOpError("Unhandled capture kind");
+        break;
+        }
+      }
+  }
+}
+
 // Generate all map related information and fill the combinedInfo.
 static void genMapInfos(llvm::IRBuilderBase &builder,
                         LLVM::ModuleTranslation &moduleTranslation,
@@ -2111,6 +2170,20 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
                         const SmallVector<Value> &devPtrOperands = {},
                         const SmallVector<Value> &devAddrOperands = {},
                         bool isTargetParams = false) {
+  // We wish to modify some of the methods in which kernel arguments are
+  // passed based on their capture type by the target region, this can
+  // involve generating new loads and stores, which changes the
+  // MLIR value to LLVM value mapping, however, we only wish to do this
+  // locally for the current function/target and also avoid altering
+  // ModuleTranslation, so we remap the base pointer or pointer stored
+  // in the map infos corresponding MapInfoData, which is later accessed
+  // by genMapInfos and createTarget to help generate the kernel and
+  // kernel arg structure. It primarily becomes relevant in cases like
+  // bycopy, or byref range'd arrays. In the default case, we simply
+  // pass thee pointer byref as both basePointer and pointer.
+  if (!moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
+      createAlteredByCaptureMap(mapData, moduleTranslation, builder);
+
   llvm::OpenMPIRBuilder *ompBuilder = moduleTranslation.getOpenMPBuilder();
 
   auto fail = [&combinedInfo]() -> void {
@@ -2581,86 +2654,6 @@ createDeviceArgumentAccessor(MapInfoData &mapData, llvm::Argument &arg,
   return builder.saveIP();
 }
 
-// This is a variation on Clang's GenerateOpenMPCapturedVars, which
-// generates different operation (e.g. load/store) combinations for
-// arguments to the kernel, based on map capture kinds which are then
-// utilised in the combinedInfo in place of the original Map value.
-static void
-createAlteredByCaptureMap(MapInfoData &mapData,
-                          LLVM::ModuleTranslation &moduleTranslation,
-                          llvm::IRBuilderBase &builder) {
-  for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-    // if it's declare target, skip it, it's handled seperately.
-    if (!mapData.IsDeclareTarget[i]) {
-      mlir::omp::VariableCaptureKind captureKind =
-          mlir::omp::VariableCaptureKind::ByRef;
-
-      if (auto mapOp = mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(
-              mapData.MapClause[i])) {
-        captureKind = mapOp.getMapCaptureType().value_or(
-            mlir::omp::VariableCaptureKind::ByRef);
-      }
-
-      switch (captureKind) {
-      case mlir::omp::VariableCaptureKind::ByRef: {
-        // Currently handles array sectioning lowerbound case, but more
-        // logic may be required in the future. Clang invokes EmitLValue,
-        // which has specialised logic for special Clang types such as user
-        // defines, so it is possible we will have to extend this for
-        // structures or other complex types. As the general idea is that this
-        // function mimics some of the logic from Clang that we require for
-        // kernel argument passing from host -> device.
-        if (auto mapOp = mlir::dyn_cast_if_present<mlir::omp::MapInfoOp>(
-                mapData.MapClause[i])) {
-          if (!mapOp.getBounds().empty() && mapData.PtrType[i]->isArrayTy()) {
-
-            std::vector<llvm::Value *> idx =
-                std::vector<llvm::Value *>{builder.getInt64(0)};
-            for (int i = mapOp.getBounds().size() - 1; i >= 0; --i) {
-              if (auto boundOp =
-                      mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
-                          mapOp.getBounds()[i].getDefiningOp())) {
-                idx.push_back(
-                    moduleTranslation.lookupValue(boundOp.getLowerBound()));
-              }
-            }
-
-            mapData.Pointers[i] = builder.CreateInBoundsGEP(
-                mapData.PtrType[i], mapData.Pointers[i], idx);
-          }
-        }
-      } break;
-      case mlir::omp::VariableCaptureKind::ByCopy: {
-        llvm::Type *type = mapData.PtrType[i];
-        llvm::Value *newV;
-        if (mapData.Pointers[i]->getType()->isPointerTy())
-          newV = builder.CreateLoad(type, mapData.Pointers[i]);
-        else
-          newV = mapData.Pointers[i];
-
-        if (!type->isPointerTy()) {
-          auto curInsert = builder.saveIP();
-          builder.restoreIP(findAllocaInsertPoint(builder, moduleTranslation));
-          auto *memTempAlloc =
-              builder.CreateAlloca(builder.getPtrTy(), nullptr, ".casted");
-          builder.restoreIP(curInsert);
-
-          builder.CreateStore(newV, memTempAlloc);
-          newV = builder.CreateLoad(builder.getPtrTy(), memTempAlloc);
-        }
-
-        mapData.Pointers[i] = newV;
-        mapData.BasePointers[i] = newV;
-      } break;
-      case mlir::omp::VariableCaptureKind::This:
-      case mlir::omp::VariableCaptureKind::VLAType:
-        mapData.MapClause[i]->emitOpError("Unhandled capture kind");
-        break;
-      }
-    }
-  }
-}
-
 static LogicalResult
 convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
                  LLVM::ModuleTranslation &moduleTranslation) {
@@ -2711,20 +2704,6 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   MapInfoData mapData;
   collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl,
                                 builder);
-
-  // We wish to modify some of the methods in which kernel arguments are
-  // passed based on their capture type by the target region, this can
-  // involve generating new loads and stores, which changes the
-  // MLIR value to LLVM value mapping, however, we only wish to do this
-  // locally for the current function/target and also avoid altering
-  // ModuleTranslation, so we remap the base pointer or pointer stored
-  // in the map infos corresponding MapInfoData, which is later accessed
-  // by genMapInfos and createTarget to help generate the kernel and
-  // kernel arg structure. It primarily becomes relevant in cases like
-  // bycopy, or byref range'd arrays. In the default case, we simply
-  // pass thee pointer byref as both basePointer and pointer.
-  if (!moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
-    createAlteredByCaptureMap(mapData, moduleTranslation, builder);
 
   llvm::OpenMPIRBuilder::MapInfosTy combinedInfos;
   auto genMapInfoCB = [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP)

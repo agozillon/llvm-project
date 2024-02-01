@@ -49,6 +49,29 @@ using DeclareTargetCapturePair =
 //===----------------------------------------------------------------------===//
 
 static Fortran::semantics::Symbol *
+getOmpObjParentSymbol(const Fortran::parser::OmpObject &ompObject) {
+  Fortran::semantics::Symbol *sym = nullptr;
+  std::visit(
+      Fortran::common::visitors{
+          [&](const Fortran::parser::Designator &designator) {
+            if (auto *structComp = Fortran::parser::Unwrap<
+                    Fortran::parser::StructureComponent>(designator)) {
+              sym = GetFirstName(structComp->base).symbol;
+            } else if (auto *arrayEle = Fortran::parser::Unwrap<
+                           Fortran::parser::ArrayElement>(designator)) {
+              sym = GetFirstName(arrayEle->base).symbol;
+            } else if (const Fortran::parser::Name *name =
+                           Fortran::semantics::getDesignatorNameIfDataRef(
+                               designator)) {
+              sym = name->symbol;
+            }
+          },
+          [&](const Fortran::parser::Name &name) { sym = name.symbol; }},
+      ompObject.u);
+  return sym;
+}
+
+static Fortran::semantics::Symbol *
 getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject) {
   Fortran::semantics::Symbol *sym = nullptr;
   std::visit(
@@ -59,7 +82,7 @@ getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject) {
               sym = structComp->component.symbol;
             } else if (auto *arrayEle = Fortran::parser::Unwrap<
                            Fortran::parser::ArrayElement>(designator)) {
-              sym = GetFirstName(arrayEle->base).symbol;
+              sym = GetLastName(arrayEle->base).symbol;
             } else if (const Fortran::parser::Name *name =
                            Fortran::semantics::getDesignatorNameIfDataRef(
                                designator)) {
@@ -1850,53 +1873,18 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
 }
 
 int findComponenetMemberPlacement(
-    const Fortran::parser::StructureComponent *sc) {
+    const Fortran::semantics::Symbol *dTypeSym,
+    const Fortran::semantics::Symbol *componentSym) {
   int placement = -1;
   if (const auto *derived{
-          sc->component.symbol->owner()
-              .derivedTypeSpec()
-              ->typeSymbol()
-              .detailsIf<Fortran::semantics::DerivedTypeDetails>()}) {
+          dTypeSym->detailsIf<Fortran::semantics::DerivedTypeDetails>()}) {
     for (auto t : derived->componentNames()) {
       placement++;
-      if (t == sc->component.symbol->name())
+      if (t == componentSym->name())
         return placement;
     }
   }
   return placement;
-}
-
-mlir::Value getFirstMappedMemberPtr(mlir::omp::MapInfoOp mapInfo) {
-  // Only 1 member has been mapped, we can return it.
-  if (mapInfo.getMembersIndex()->size() == 1)
-    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-            mapInfo.getMembers()[0].getDefiningOp()))
-      return mapOp.getVarPtr();
-
-  // Our first member is also the first in the derived type, we can return it.
-  int64_t curFirstPos =
-      mapInfo.getMembersIndex()->begin()->cast<mlir::IntegerAttr>().getInt();
-  if (curFirstPos == 0)
-    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-            mapInfo.getMembers()[0].getDefiningOp()))
-      return mapOp.getVarPtr();
-
-  int64_t idx = 1, curFirstIdx = 0, memberPlacement = 0;
-  for (const auto *iter = std::next(mapInfo.getMembersIndex()->begin());
-       iter != mapInfo.getMembersIndex()->end(); iter++) {
-    memberPlacement = iter->cast<mlir::IntegerAttr>().getInt();
-    if (memberPlacement < curFirstPos) {
-      curFirstIdx = idx;
-      curFirstPos = memberPlacement;
-    }
-    idx++;
-  }
-
-  if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapInfo.getMembers()[curFirstIdx].getDefiningOp()))
-    return mapOp.getVarPtr();
-
-  return {};
 }
 
 static void
@@ -1985,14 +1973,14 @@ bool ClauseProcessor::processMap(
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
           mlir::Value varPtrPtr;
-          Fortran::semantics::Symbol* parentSym = nullptr;
+          const Fortran::semantics::Symbol* parentSym = nullptr;
 
-          if (const auto *sc =
-                  Fortran::parser::Unwrap<Fortran::parser::StructureComponent>(
-                      ompObject)) {
-            memberPlacementIndices.push_back(firOpBuilder.getI64IntegerAttr(
-                findComponenetMemberPlacement(sc)));
-            parentSym = GetFirstName(sc->base).symbol;
+          if (getOmpObjectSymbol(ompObject)->owner().IsDerivedType()) {
+            memberPlacementIndices.push_back(
+                firOpBuilder.getI64IntegerAttr(findComponenetMemberPlacement(
+                    getOmpObjectSymbol(ompObject)->owner().symbol(),
+                    getOmpObjectSymbol(ompObject))));
+            parentSym = getOmpObjParentSymbol(ompObject);                        
             varPtrPtr = converter.getSymbolAddress(*parentSym);
             memberParentSyms.push_back(parentSym);
           }
@@ -2063,9 +2051,8 @@ bool ClauseProcessor::processMap(
     } else {
       // create parent to emplace and bind members
       auto origSymbol = converter.getSymbolAddress(*sym);
-
       mlir::Value mapOp = createMapInfoOp(
-          firOpBuilder, firOpBuilder.getUnknownLoc(), origSymbol, origSymbol,
+          firOpBuilder, firOpBuilder.getUnknownLoc(), origSymbol, mlir::Value(),
           sym->name().ToString(), {}, {memberMaps[idx]},
           mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
                                memberPlacementIndices[idx]),
@@ -2084,13 +2071,7 @@ bool ClauseProcessor::processMap(
         mapSymbols->push_back(sym);
     }
   }
-
-  for (auto map : mapOperands) {
-    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(map.getDefiningOp()))
-      if (!mapOp.getMembers().empty())
-        mapOp.getVarPtrMutable().assign(getFirstMappedMemberPtr(mapOp));
-  }
-
+  
   return clauseFound;
 }
 
@@ -3136,7 +3117,6 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
 
   genBodyOfTargetOp(converter, eval, genNested, targetOp, mapSymTypes,
                     mapSymLocs, mapSymbols, currentLocation);
-
   return targetOp;
 }
 
