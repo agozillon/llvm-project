@@ -2039,28 +2039,32 @@ static void processMapWithMembersOf(
     llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
     llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo, MapInfoData &mapData,
     uint64_t mapDataIndex, bool isTargetParams) {
-  auto parentClause =
-      mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
-  // If we have a partial map (no parent referneced in the map clauses of the
-  // directive, only members) and only a single member, we do not need to bind
-  // the map of the member to the parent, we can pass the member seperately.
-  if (parentClause.getMembers().size() == 1 && parentClause.getPartialMap()) {
-      auto memberClause = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          parentClause.getMembers()[0].getDefiningOp());
-      int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
-      // offload_baseptrs (BasePointers) = the struct alloca/ref to the struct
-      // offload_ptrs (Pointers) = the gep of the member in struct
+    auto parentClause =
+        mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+    // If we have a partial map (no parent referneced in the map clauses of the
+    // directive, only members) and only a single member, we do not need to bind
+    // the map of the member to the parent, we can pass the member seperately.
+    if (parentClause.getMembers().size() == 1 && parentClause.getPartialMap()) {
+    auto memberClause = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+        parentClause.getMembers()[0].getDefiningOp());
+    int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
+    // Primarily only scalars can be optimised this way it seems, array's
+    // need to be mapped as a regular record <-> member map even if partially
+    // mapping.
+    if (!mapData.BaseType[memberDataIdx]->isArrayTy()) {
       processIndividualMap(mapData, memberDataIdx, combinedInfo,
                            isTargetParams);
-  } else {
-      llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
-          mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
-                               combinedInfo, mapData, mapDataIndex,
-                               isTargetParams);
-      processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
-                                  combinedInfo, mapData, mapDataIndex,
-                                  memberOfParentFlag);
-  }
+      return;
+    }
+    }
+
+    llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
+        mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
+                             combinedInfo, mapData, mapDataIndex,
+                             isTargetParams);
+    processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
+                                combinedInfo, mapData, mapDataIndex,
+                                memberOfParentFlag);
 }
 
 // This is a variation on Clang's GenerateOpenMPCapturedVars, which
