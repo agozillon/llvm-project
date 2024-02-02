@@ -1898,6 +1898,65 @@ checkAndApplyDeclTargetMapFlags(Fortran::lower::AbstractConverter &converter,
     }
 }
 
+static void insertChildMapInfoIntoParent(
+    Fortran::lower::AbstractConverter &converter,
+    llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
+    llvm::SmallVector<mlir::Value> &memberMaps,
+    llvm::SmallVector<mlir::Attribute> &memberPlacementIndices,
+    llvm::SmallVectorImpl<mlir::Value> &mapOperands,
+    llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
+    llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
+    llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols) {
+  // TODO: For multi-nested record types the top level parent is currently
+  // the containing parent for all member operations.
+  for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
+    bool parentExists = false;
+    size_t parentIdx = 0;
+    for (size_t i = 0; i < mapSymbols->size(); ++i) {
+      if ((*mapSymbols)[i] == sym) {
+        parentExists = true;
+        parentIdx = i;
+      }
+    }
+
+    if (parentExists) {
+      // found a parent, append.
+      if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+              mapOperands[parentIdx].getDefiningOp())) {
+        mapOp.getMembersMutable().append(memberMaps[idx]);
+        llvm::SmallVector<mlir::Attribute> memberIndexTmp{
+            mapOp.getMembersIndexAttr().begin(),
+            mapOp.getMembersIndexAttr().end()};
+        memberIndexTmp.push_back(memberPlacementIndices[idx]);
+        mapOp.setMembersIndexAttr(mlir::ArrayAttr::get(
+            converter.getFirOpBuilder().getContext(), memberIndexTmp));
+      }
+    } else {
+      // create parent to emplace and bind members
+      auto origSymbol = converter.getSymbolAddress(*sym);
+      mlir::Value mapOp = createMapInfoOp(
+          converter.getFirOpBuilder(), converter.getFirOpBuilder().getUnknownLoc(),
+          origSymbol, mlir::Value(), sym->name().ToString(), {},
+          {memberMaps[idx]},
+          mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
+                               memberPlacementIndices[idx]),
+          static_cast<
+              std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+              llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
+              llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM),
+          mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(), true);
+
+      mapOperands.push_back(mapOp);
+      if (mapSymTypes)
+        mapSymTypes->push_back(mapOp.getType());
+      if (mapSymLocs)
+        mapSymLocs->push_back(mapOp.getLoc());
+      if (mapSymbols)
+        mapSymbols->push_back(sym);
+    }
+  }
+}
+
 bool ClauseProcessor::processMap(
     mlir::Location currentLocation, const llvm::omp::Directive &directive,
     Fortran::semantics::SemanticsContext &semanticsContext,
@@ -1966,16 +2025,14 @@ bool ClauseProcessor::processMap(
 
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
-          mlir::Value varPtrPtr;
-          const Fortran::semantics::Symbol* parentSym = nullptr;
+          const Fortran::semantics::Symbol *parentSym = nullptr;
 
           if (getOmpObjectSymbol(ompObject)->owner().IsDerivedType()) {
             memberPlacementIndices.push_back(
                 firOpBuilder.getI64IntegerAttr(findComponenetMemberPlacement(
                     getOmpObjectSymbol(ompObject)->owner().symbol(),
                     getOmpObjectSymbol(ompObject))));
-            parentSym = getOmpObjParentSymbol(ompObject);                        
-            varPtrPtr = converter.getSymbolAddress(*parentSym);
+            parentSym = getOmpObjParentSymbol(ompObject);
             memberParentSyms.push_back(parentSym);
           }
 
@@ -1996,8 +2053,8 @@ bool ClauseProcessor::processMap(
           // optimisation passes may alter this to ByCopy or other capture
           // types to optimise
           mlir::Value mapOp = createMapInfoOp(
-              firOpBuilder, clauseLocation, symAddr, varPtrPtr, asFortran.str(),
-              bounds, {}, mlir::ArrayAttr{},
+              firOpBuilder, clauseLocation, symAddr, mlir::Value{},
+              asFortran.str(), bounds, {}, mlir::ArrayAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   objectsMapTypeBits),
@@ -2017,55 +2074,9 @@ bool ClauseProcessor::processMap(
         }
       });
 
-  // TODO: Remember I need to add varPtrPtr to member maps above, or perhaps here.
-  // NOTE/FIXME: For multi-nested record types the top level parent is currently
-  // the containing parent for all member operations.
-  for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
-    bool parentExists = false;
-    size_t parentIdx = 0;
-    for (size_t i = 0; i < mapSymbols->size(); ++i) {
-      if ((*mapSymbols)[i] == sym) {
-        parentExists = true;
-        parentIdx = i;
-      }
-    }
-
-    if (parentExists) {
-      // found a parent, append.
-      if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-              mapOperands[parentIdx].getDefiningOp())) {
-        mapOp.getMembersMutable().append(memberMaps[idx]);
-        llvm::SmallVector<mlir::Attribute> memberIndexTmp{
-            mapOp.getMembersIndexAttr().begin(),
-            mapOp.getMembersIndexAttr().end()};
-        memberIndexTmp.push_back(memberPlacementIndices[idx]);
-        mapOp.setMembersIndexAttr(mlir::ArrayAttr::get(
-            converter.getFirOpBuilder().getContext(), memberIndexTmp));
-      }
-    } else {
-      // create parent to emplace and bind members
-      auto origSymbol = converter.getSymbolAddress(*sym);
-      mlir::Value mapOp = createMapInfoOp(
-          firOpBuilder, firOpBuilder.getUnknownLoc(), origSymbol, mlir::Value(),
-          sym->name().ToString(), {}, {memberMaps[idx]},
-          mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
-                               memberPlacementIndices[idx]),
-          static_cast<
-              std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-              llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
-              llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM),
-          mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(), true);
-
-      mapOperands.push_back(mapOp);
-      if (mapSymTypes)
-        mapSymTypes->push_back(mapOp.getType());
-      if (mapSymLocs)
-        mapSymLocs->push_back(mapOp.getLoc());
-      if (mapSymbols)
-        mapSymbols->push_back(sym);
-    }
-  }
-  
+  insertChildMapInfoIntoParent(converter, memberParentSyms, memberMaps,
+                               memberPlacementIndices, mapOperands, mapSymTypes,
+                               mapSymLocs, mapSymbols);
   return clauseFound;
 }
 

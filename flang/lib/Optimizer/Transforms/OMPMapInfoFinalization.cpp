@@ -1,4 +1,4 @@
-//===- OMPDescriptorMapInfoGen.cpp
+//===- OMPMapInfoFinalization.cpp
 //---------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -9,11 +9,20 @@
 
 //===----------------------------------------------------------------------===//
 /// \file
-/// An OpenMP dialect related pass for FIR/HLFIR which expands MapInfoOp's
-/// containing descriptor related types (fir::BoxType's) into multiple
-/// MapInfoOp's containing the parent descriptor and pointer member components
-/// for individual mapping, treating the descriptor type as a record type for
-/// later lowering in the OpenMP dialect.
+/// An OpenMP dialect related pass for FIR/HLFIR which performs some
+/// pre-processing of MapInfoOp's after the module has been lowered to
+/// finalize them.
+///
+/// For example, it expands MapInfoOp's containing descriptor related
+/// types (fir::BoxType's) into multiple MapInfoOp's containing the parent
+/// descriptor and pointer member components for individual mapping,
+/// treating the descriptor type as a record type for later lowering in the
+/// OpenMP dialect.
+///
+/// The pass also adds MapInfoOp's that are members of a parent object but are
+/// not directly used in the body of a target region to it's BlockArgument list
+/// to maintain consistency across all MapInfoOp's tied to a region directly or
+/// indirectly via an parent object.
 //===----------------------------------------------------------------------===//
 
 #include "flang/Optimizer/Builder/FIRBuilder.h"
@@ -33,14 +42,14 @@
 #include <iterator>
 
 namespace fir {
-#define GEN_PASS_DEF_OMPDESCRIPTORMAPINFOGENPASS
+#define GEN_PASS_DEF_OMPMAPINFOFINALIZATIONPASS
 #include "flang/Optimizer/Transforms/Passes.h.inc"
 } // namespace fir
 
 namespace {
-class OMPDescriptorMapInfoGenPass
-    : public fir::impl::OMPDescriptorMapInfoGenPassBase<
-          OMPDescriptorMapInfoGenPass> {
+class OMPMapInfoFinalizationPass
+    : public fir::impl::OMPMapInfoFinalizationPassBase<
+          OMPMapInfoFinalizationPass> {
 
   void genDescriptorMemberMaps(mlir::omp::MapInfoOp op,
                                fir::FirOpBuilder &builder,
@@ -87,8 +96,8 @@ class OMPDescriptorMapInfoGenPass
         loc, baseAddrAddr.getType(), baseAddrAddr,
         mlir::TypeAttr::get(llvm::cast<mlir::omp::PointerLikeType>(
                                 fir::unwrapRefType(baseAddrAddr.getType()))
-                                .getElementType()), mlir::Value{},
-        mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
+                                .getElementType()),
+        mlir::Value{}, mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
         op.getBounds(),
         builder.getIntegerAttr(
             builder.getIntegerType(64, false),
@@ -229,7 +238,7 @@ class OMPDescriptorMapInfoGenPass
       // all users appropriately, making sure to only add a single member link
       // per new generation for the original originating descriptor MapInfoOp.
       assert(llvm::hasSingleElement(op->getUsers()) &&
-             "OMPDescriptorMapInfoGen currently only supports single users "
+             "OMPMapInfoFinalization currently only supports single users "
              "of a MapInfoOp");
 
       if (!op.getMembers().empty()) {
@@ -247,7 +256,7 @@ class OMPDescriptorMapInfoGenPass
 } // namespace
 
 namespace fir {
-std::unique_ptr<mlir::Pass> createOMPDescriptorMapInfoGenPass() {
-  return std::make_unique<OMPDescriptorMapInfoGenPass>();
+std::unique_ptr<mlir::Pass> createOMPMapInfoFinalizationPass() {
+  return std::make_unique<OMPMapInfoFinalizationPass>();
 }
 } // namespace fir
