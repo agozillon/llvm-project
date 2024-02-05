@@ -983,7 +983,7 @@ static OpTy getSingleNestedOpOfType(Region &region) {
   return std::distance(ops.begin(), ops.end()) != 1 ? OpTy() : *ops.begin();
 }
 LogicalResult UpdateDataOp::verify() {
-  return verifyMapClause(*this, getMotionOperands());
+  return verifyMapClause(*this, getMapOperands());
 }
 
 /// Only allow OpenMP terminators and non-OpenMP ops that have known memory
