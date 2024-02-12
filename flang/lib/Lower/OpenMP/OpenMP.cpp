@@ -936,6 +936,7 @@ genBodyOfTargetOp(Fortran::lower::AbstractConverter &converter,
         mlir::Value mapOp = createMapInfoOp(
             firOpBuilder, copyVal.getLoc(), copyVal, mlir::Value{}, name.str(),
             bounds, llvm::SmallVector<mlir::Value>{},
+            mlir::DenseIntElementsAttr{},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT),
@@ -1617,7 +1618,7 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
 
         mlir::Value mapOp = createMapInfoOp(
             firOpBuilder, baseOp.getLoc(), baseOp, mlir::Value{}, name.str(),
-            bounds, {},
+            bounds, {}, mlir::DenseIntElementsAttr{},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 mapFlag),

@@ -811,9 +811,10 @@ mlir::omp::MapInfoOp
 createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::Value baseAddr, mlir::Value varPtrPtr, std::string name,
                 llvm::ArrayRef<mlir::Value> bounds,
-                llvm::ArrayRef<mlir::Value> members, uint64_t mapType,
+                llvm::ArrayRef<mlir::Value> members,
+                mlir::DenseIntElementsAttr membersIndex, uint64_t mapType,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
-                bool isVal) {
+                bool partialMap) {
   if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
     baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
     retTy = baseAddr.getType();
@@ -823,10 +824,10 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
       llvm::cast<mlir::omp::PointerLikeType>(retTy).getElementType());
 
   mlir::omp::MapInfoOp op = builder.create<mlir::omp::MapInfoOp>(
-      loc, retTy, baseAddr, varType, varPtrPtr, members, bounds,
+      loc, retTy, baseAddr, varType, varPtrPtr, members, membersIndex, bounds,
       builder.getIntegerAttr(builder.getIntegerType(64, false), mapType),
       builder.getAttr<mlir::omp::VariableCaptureKindAttr>(mapCaptureType),
-      builder.getStringAttr(name));
+      builder.getStringAttr(name), builder.getBoolAttr(partialMap));
 
   return op;
 }
@@ -838,7 +839,11 @@ bool ClauseProcessor::processMap(
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes) const {
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
-  return findRepeatableClause<omp::clause::Map>(
+  std::map<const Fortran::semantics::Symbol *,
+           llvm::SmallVector<OmpMapMemberIndicesData>>
+      parentMemberIndices;
+
+  bool clauseFound = findRepeatableClause<omp::clause::Map>(
       [&](const omp::clause::Map &clause,
           const Fortran::parser::CharBlock &source) {
         using Map = omp::clause::Map;
@@ -903,24 +908,39 @@ bool ClauseProcessor::processMap(
           // Explicit map captures are captured ByRef by default,
           // optimisation passes may alter this to ByCopy or other capture
           // types to optimise
-          mlir::Value mapOp = createMapInfoOp(
+          mlir::omp::MapInfoOp mapOp = createMapInfoOp(
               firOpBuilder, clauseLocation, symAddr, mlir::Value{},
-              asFortran.str(), bounds, {},
+              asFortran.str(), bounds, {}, mlir::DenseIntElementsAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   mapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
-          result.mapVars.push_back(mapOp);
-
-          if (mapSyms)
+          if (object.id()->owner().IsDerivedType()) {
+            if (auto dataRef{ExtractDataRef(object.designator)}) {
+              const Fortran::semantics::Symbol *parentSym = parentSym =
+                  &dataRef->GetFirstSymbol();
+              assert(parentSym &&
+                     "Could not find parent symbol during lower of "
+                     "a component member in OpenMP map clause");
+              parentMemberIndices[parentSym].push_back(
+                  {generateMemberPlacementIndices(object, semaCtx), mapOp});
+            }
+          } else {
+            result.mapVars.push_back(mapOp);
             mapSyms->push_back(object.id());
-          if (mapSymLocs)
-            mapSymLocs->push_back(symAddr.getLoc());
-          if (mapSymTypes)
-            mapSymTypes->push_back(symAddr.getType());
+            if (mapSymTypes)
+              mapSymTypes->push_back(symAddr.getType());
+            if (mapSymLocs)
+              mapSymLocs->push_back(symAddr.getLoc());
+          }
         }
       });
+
+  insertChildMapInfoIntoParent(converter, parentMemberIndices, result.mapVars,
+                               mapSymTypes, mapSymLocs, mapSyms);
+
+  return clauseFound;
 }
 
 bool ClauseProcessor::processReduction(
