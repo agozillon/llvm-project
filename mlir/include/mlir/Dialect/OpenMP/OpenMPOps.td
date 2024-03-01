@@ -1308,7 +1308,7 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
                        TypeAttr:$var_type,
                        Optional<OpenMP_PointerLikeType>:$var_ptr_ptr,
                        Variadic<OpenMP_PointerLikeType>:$members,
-                       OptionalAttr<I64ArrayAttr>:$members_index,
+                       OptionalAttr<AnyIntElementsAttr>:$members_index,
                        Variadic<DataBoundsType>:$bounds, /* rank-0 to rank-{n-1} */
                        OptionalAttr<UI64Attr>:$map_type,
                        OptionalAttr<VariableCaptureKindAttr>:$map_capture_type,

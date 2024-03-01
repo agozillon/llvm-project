@@ -14,6 +14,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Support/CommandLine.h"
+#include <list>
 
 extern llvm::cl::opt<bool> treatIndexAsSection;
 extern llvm::cl::opt<bool> enableDelayedPrivatization;
@@ -35,6 +36,7 @@ class Symbol;
 namespace parser {
 struct OmpObject;
 struct OmpObjectList;
+struct Designator;
 } // namespace parser
 
 namespace lower {
@@ -46,6 +48,9 @@ namespace omp {
 using DeclareTargetCapturePair =
     std::pair<mlir::omp::DeclareTargetCaptureClause,
               const Fortran::semantics::Symbol &>;
+
+std::list<int>
+generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject);
 
 mlir::omp::MapInfoOp
 createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
