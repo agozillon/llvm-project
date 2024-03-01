@@ -940,12 +940,26 @@ bool ClauseProcessor::processMap(
                                  "component during map clause processing");
             parentSym = GetFirstName(*designator).symbol;
             memberParentSyms.push_back(parentSym);
+        
+            auto test = generateMemberPlacementIndices(ompObject);
+
+            for (auto v : test) {
+              llvm::errs() << v << "\n";
+            }
+// firOpBuilder.getDe
+
+// time to try and find the right way to define a multi-dimensional array of integers,
+// DenseIntElementsAttr seems to be the way to do it... used only in ControlFlowOps.td/LLVMOps.td
+
+// + Do a bit of presentation.... need to get it done for Tuesday
             memberPlacementIndices.push_back(
                 firOpBuilder.getI64IntegerAttr(findComponentMemberPlacement(
                     &parentSym->GetType()->derivedTypeSpec().typeSymbol(),
                     getOmpObjectSymbol(ompObject))));
           }
 
+// 1) find thing to access the N-th member of a dtype symbol, or is it required... if the base address is always the top level construct...
+// 2) What direction will we go with the member mapping for nesting? the way allocatables can be represented will affect this
           Fortran::lower::AddrAndBoundsInfo info =
               Fortran::lower::gatherDataOperandAddrAndBounds<
                   Fortran::parser::OmpObject, mlir::omp::DataBoundsOp,

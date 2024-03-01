@@ -12,6 +12,7 @@
 
 #include "Utils.h"
 
+#include <cstdint>
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Optimizer/Builder/FIRBuilder.h>
@@ -98,8 +99,52 @@ int findComponentMemberPlacement(
     const Fortran::semantics::Symbol *componentSym) {
   const auto *derived =
       dTypeSym->detailsIf<Fortran::semantics::DerivedTypeDetails>();
-  if (!derived)
-    return -1;
+  
+  int placement = 0;
+  for (auto t : derived->componentNames()) {
+    if (t == componentSym->name())
+      return placement;
+    placement++;
+  }
+
+  return -1;
+}
+
+const parser::StructureComponent *getStructComp(const parser::DataRef &x) {
+  const parser::StructureComponent* comp = nullptr;
+   common::visit(
+      common::visitors{
+          [&](const parser::Name &name)  { comp = nullptr; },
+          [&](const common::Indirection<parser::StructureComponent> &sc) { comp = &sc.value(); },
+          [&](const common::Indirection<parser::ArrayElement> &ae) { comp = getStructComp(ae.value().base); 
+            },
+          [&](const common::Indirection<parser::CoindexedNamedObject> &ci) { comp = getStructComp(ci.value().base); },
+      },
+      x.u);
+
+  return comp;
+}
+
+const parser::StructureComponent *getStructComp(const parser::Substring &x) {
+  return getStructComp(std::get<parser::DataRef>(x.t));
+}
+
+const parser::StructureComponent *getStructComp(const parser::Designator &x) {
+  const parser::StructureComponent *comp = nullptr;
+  common::visit(common::visitors{
+                    [&](const auto &y) { comp = getStructComp(y); },
+                },
+                x.u);
+  return comp;
+}
+
+int getComponentPlacementInParent(
+    const Fortran::semantics::Symbol *componentSym) {
+  const auto *derived =
+      componentSym->owner()
+          .derivedTypeSpec()
+          ->typeSymbol()
+          .detailsIf<Fortran::semantics::DerivedTypeDetails>();
 
   int placement = 0;
   for (auto t : derived->componentNames()) {
@@ -109,6 +154,27 @@ int findComponentMemberPlacement(
   }
 
   return -1;
+}
+
+std::list<int>
+generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject) {
+  assert(getOmpObjectSymbol(ompObject)->owner().IsDerivedType() &&
+         "Expected an OmpObject that was a component of a derived type");
+  const auto *designator =
+      Fortran::parser::Unwrap<Fortran::parser::Designator>(ompObject.u);
+  assert(designator && "Expected a designator from derived type "
+                       "component during map clause processing");
+  const Fortran::parser::StructureComponent *curComp =
+      getStructComp(*designator);
+
+  std::list<int> indices;
+  while (curComp) {
+    indices.push_front(
+        getComponentPlacementInParent(curComp->component.symbol));
+    curComp = getStructComp(curComp->base);
+  }
+
+  return indices;
 }
 
 void insertChildMapInfoIntoParent(
