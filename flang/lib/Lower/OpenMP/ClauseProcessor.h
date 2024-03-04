@@ -188,7 +188,7 @@ bool ClauseProcessor::processMotionClauses(
     Fortran::lower::StatementContext &stmtCtx,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands) {
   llvm::SmallVector<mlir::omp::MapInfoOp> memberMaps;
-  llvm::SmallVector<mlir::Attribute> memberPlacementIndices;
+  llvm::SmallVector<llvm::SmallVector<int>> memberPlacementIndices;
   llvm::SmallVector<const Fortran::semantics::Symbol *> memberParentSyms,
       mapSymbols;
 
@@ -224,9 +224,7 @@ bool ClauseProcessor::processMotionClauses(
             parentSym = GetFirstName(*designator).symbol;
             memberParentSyms.push_back(parentSym);
             memberPlacementIndices.push_back(
-                firOpBuilder.getI64IntegerAttr(findComponentMemberPlacement(
-                    &parentSym->GetType()->derivedTypeSpec().typeSymbol(),
-                    getOmpObjectSymbol(ompObject))));
+                generateMemberPlacementIndices(ompObject));
           }
 
           Fortran::lower::AddrAndBoundsInfo info =

@@ -97,7 +97,7 @@ class OMPMapInfoFinalizationPass
         mlir::TypeAttr::get(llvm::cast<mlir::omp::PointerLikeType>(
                                 fir::unwrapRefType(baseAddrAddr.getType()))
                                 .getElementType()),
-        baseAddrAddr, mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
+        baseAddrAddr, mlir::SmallVector<mlir::Value>{}, mlir::DenseIntElementsAttr{},
         op.getBounds(),
         builder.getIntegerAttr(
             builder.getIntegerType(64, false),
@@ -139,8 +139,8 @@ class OMPMapInfoFinalizationPass
         op->getLoc(), op.getResult().getType(), descriptor,
         mlir::TypeAttr::get(fir::unwrapRefType(descriptor.getType())),
         mlir::Value{}, mlir::SmallVector<mlir::Value>{baseAddr},
-        mlir::ArrayAttr::get(builder.getContext(),
-                             builder.getI64IntegerAttr(0)) /*members_index*/,
+        /*mlir::ArrayAttr::get(builder.getContext(),
+                             builder.getI64IntegerAttr(0))*/ mlir::DenseIntElementsAttr{} /*members_index*/,
         mlir::SmallVector<mlir::Value>{},
         builder.getIntegerAttr(builder.getIntegerType(64, false),
                                op.getMapType().value()),

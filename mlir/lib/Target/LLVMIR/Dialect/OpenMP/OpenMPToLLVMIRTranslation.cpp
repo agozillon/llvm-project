@@ -1948,29 +1948,30 @@ static int getMapDataMemberIdx(MapInfoData &mapData,
 static mlir::omp::MapInfoOp
 getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
   // Only 1 member has been mapped, we can return it.
-  if (mapInfo.getMembersIndex()->size() == 1)
-    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-            mapInfo.getMembers()[0].getDefiningOp()))
-      return mapOp;
+  // if (mapInfo.getMembersIndex()->size() == 1)
+  //   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+  //           mapInfo.getMembers()[0].getDefiningOp()))
+  //     return mapOp;
 
-  std::vector<size_t> indices(mapInfo.getMembersIndexAttr().size());
-  std::iota(indices.begin(), indices.end(), 0);
-  llvm::sort(indices.begin(), indices.end(),
-             [&](const size_t a, const size_t b) {
-               return mapInfo.getMembersIndexAttr()[a]
-                          .cast<mlir::IntegerAttr>()
-                          .getInt() < mapInfo.getMembersIndexAttr()[b]
-                                          .cast<mlir::IntegerAttr>()
-                                          .getInt();
-             });
+  // std::vector<size_t> indices(mapInfo.getMembersIndexAttr().size());
+  // std::iota(indices.begin(), indices.end(), 0);
+  // llvm::sort(indices.begin(), indices.end(),
+  //            [&](const size_t a, const size_t b) {
+  //              return mapInfo.getMembersIndexAttr()[a]
+  //                         .cast<mlir::IntegerAttr>()
+  //                         .getInt() < mapInfo.getMembersIndexAttr()[b]
+  //                                         .cast<mlir::IntegerAttr>()
+  //                                         .getInt();
+  //            });
 
-  if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
-              .getDefiningOp()))
-    return mapOp;
+  // if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+  //         mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
+  //             .getDefiningOp()))
+  //   return mapOp;
 
   assert(false && "getFirstOrLastMappedMemberPtr could not find approproaite "
                   "map information");
+  return {};
 }
 
 /// This function calculates the array/pointer offset for map data provided
