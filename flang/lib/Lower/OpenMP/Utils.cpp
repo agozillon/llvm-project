@@ -14,6 +14,7 @@
 #include "Clauses.h"
 
 #include <cstdint>
+#include <numeric>
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Optimizer/Builder/FIRBuilder.h>
@@ -157,7 +158,7 @@ int getComponentPlacementInParent(
   return -1;
 }
 
-std::list<int>
+llvm::SmallVector<int>
 generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject) {
   assert(getOmpObjectSymbol(ompObject)->owner().IsDerivedType() &&
          "Expected an OmpObject that was a component of a derived type");
@@ -175,20 +176,39 @@ generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject) {
     curComp = getStructComp(curComp->base);
   }
 
-  return indices;
+  return llvm::SmallVector<int>{std::begin(indices), std::end(indices)};
+}
+
+mlir::DenseIntElementsAttr createDenseElementsAttrFromIndices(
+    llvm::SmallVector<llvm::SmallVector<int>> &memberPlacementIndices,
+    fir::FirOpBuilder &builder) {
+  llvm::SmallVector<int64_t> shape;
+  for (auto v : memberPlacementIndices)
+    shape.push_back(v.size());
+
+  llvm::SmallVector<int> indicesFlattened =
+      std::accumulate(memberPlacementIndices.begin(),
+                      memberPlacementIndices.end(), llvm::SmallVector<int>(),
+                      [](llvm::SmallVector<int> &x, llvm::SmallVector<int> &y) {
+                        x.insert(x.end(), y.begin(), y.end());
+                        return x;
+                      });
+
+  return mlir::DenseIntElementsAttr::get(
+      mlir::VectorType::get(llvm::ArrayRef<int64_t>(shape),
+                            builder.getIntegerType(64)),
+      indicesFlattened);
 }
 
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
     llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<mlir::Attribute> &memberPlacementIndices,
+    llvm::SmallVector<llvm::SmallVector<int>> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols) {
-  // TODO: For multi-nested record types the top level parent is currently
-  // the containing parent for all member operations.
   for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
     bool parentExists = false;
     size_t parentIdx = 0;
@@ -200,20 +220,32 @@ void insertChildMapInfoIntoParent(
       }
     }
 
+I think we will have to change the below, to create or append the mapinfoop at the end, and we 
+divide up the members indices between them all beforehand so we have to create the denseattr a minimal
+number of times. perhaps tracking a std::pair of map To member indices...
     if (parentExists) {
       auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
           mapOperands[parentIdx].getDefiningOp());
       assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
                       "an expected MapInfoOp");
 
+
+
       // found a parent, append.
       mapOp.getMembersMutable().append((mlir::Value)memberMaps[idx]);
-      llvm::SmallVector<mlir::Attribute> memberIndexTmp{
-          mapOp.getMembersIndexAttr().begin(),
-          mapOp.getMembersIndexAttr().end()};
-      memberIndexTmp.push_back(memberPlacementIndices[idx]);
-      mapOp.setMembersIndexAttr(mlir::ArrayAttr::get(
-          converter.getFirOpBuilder().getContext(), memberIndexTmp));
+
+// this very likely won't work the same anymore... as it's no longer a single 1-D index
+        // mlir::DenseIntElementsAttr::get(
+        //     mlir::VectorType::get(llvm::ArrayRef<int64_t>(lShape),
+        //                           IntegerType::get(module.getContext(), 64)),
+        //     llvm::ArrayRef<int64_t>{lBounds})
+
+      // llvm::SmallVector<mlir::Attribute> memberIndexTmp{
+      //     mapOp.getMembersIndexAttr().begin(),
+      //     mapOp.getMembersIndexAttr().end()};
+      // memberIndexTmp.push_back(memberPlacementIndices[idx]);
+      // mapOp.setMembersIndexAttr(mlir::DenseIntElementsAttr::get(
+      //     /*converter.getFirOpBuilder().getContext(), memberIndexTmp)*/);
     } else {
       // NOTE: We take the map type of the first child, this may not
       // be the correct thing to do, however, we shall see. For the moment
@@ -227,8 +259,8 @@ void insertChildMapInfoIntoParent(
       mlir::Value mapOp = createMapInfoOp(
           converter.getFirOpBuilder(), origSymbol.getLoc(), origSymbol,
           mlir::Value(), sym->name().ToString(), {}, {memberMaps[idx]},
-          mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
-                               memberPlacementIndices[idx]),
+          mlir::ArrayAttr{}/*mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
+                               memberPlacementIndices[idx])*/,
           mapType, mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(),
           true);
 

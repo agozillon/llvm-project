@@ -49,7 +49,7 @@ using DeclareTargetCapturePair =
     std::pair<mlir::omp::DeclareTargetCaptureClause,
               const Fortran::semantics::Symbol &>;
 
-std::list<int>
+llvm::SmallVector<int>
 generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject);
 
 mlir::omp::MapInfoOp
@@ -74,7 +74,7 @@ void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
     llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<mlir::Attribute> &memberPlacementIndices,
+    llvm::SmallVector<llvm::SmallVector<int>> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,

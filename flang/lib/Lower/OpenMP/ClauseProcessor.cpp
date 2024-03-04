@@ -801,8 +801,14 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
   mlir::TypeAttr varType = mlir::TypeAttr::get(
       llvm::cast<mlir::omp::PointerLikeType>(retTy).getElementType());
 
+// membersIndex should probably be a vector<vector<uint>>
+  // mlir::DenseIntElementsAttr lBound = mlir::DenseIntElementsAttr::get(
+  //     mlir::VectorType::get(llvm::ArrayRef<int64_t>(mapLShape),
+  //                           firOpBuilder.getI64Type()),
+  //     llvm::ArrayRef<int64_t>{mapLBounds});
+
   mlir::omp::MapInfoOp op = builder.create<mlir::omp::MapInfoOp>(
-      loc, retTy, baseAddr, varType, varPtrPtr, members, membersIndex, bounds,
+      loc, retTy, baseAddr, varType, varPtrPtr, members, mlir::DenseIntElementsAttr{/*membersIndex*/}, bounds,
       builder.getIntegerAttr(builder.getIntegerType(64, false), mapType),
       builder.getAttr<mlir::omp::VariableCaptureKindAttr>(mapCaptureType),
       builder.getStringAttr(name), builder.getBoolAttr(partialMap));
@@ -820,7 +826,7 @@ bool ClauseProcessor::processMap(
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
 
   llvm::SmallVector<mlir::omp::MapInfoOp> memberMaps;
-  llvm::SmallVector<mlir::Attribute> memberPlacementIndices;
+  llvm::SmallVector<llvm::SmallVector<int>> memberPlacementIndices;
   llvm::SmallVector<const Fortran::semantics::Symbol *> memberParentSyms;
 
   bool clauseFound = findRepeatableClause2<ClauseTy::Map>(
@@ -886,26 +892,10 @@ bool ClauseProcessor::processMap(
                                  "component during map clause processing");
             parentSym = GetFirstName(*designator).symbol;
             memberParentSyms.push_back(parentSym);
-        
-            auto test = generateMemberPlacementIndices(ompObject);
-
-            for (auto v : test) {
-              llvm::errs() << v << "\n";
-            }
-// firOpBuilder.getDe
-
-// time to try and find the right way to define a multi-dimensional array of integers,
-// DenseIntElementsAttr seems to be the way to do it... used only in ControlFlowOps.td/LLVMOps.td
-
-// + Do a bit of presentation.... need to get it done for Tuesday
             memberPlacementIndices.push_back(
-                firOpBuilder.getI64IntegerAttr(findComponentMemberPlacement(
-                    &parentSym->GetType()->derivedTypeSpec().typeSymbol(),
-                    getOmpObjectSymbol(ompObject))));
+                generateMemberPlacementIndices(ompObject));
           }
 
-// 1) find thing to access the N-th member of a dtype symbol, or is it required... if the base address is always the top level construct...
-// 2) What direction will we go with the member mapping for nesting? the way allocatables can be represented will affect this
           Fortran::lower::AddrAndBoundsInfo info =
               Fortran::lower::gatherDataOperandAddrAndBounds<
                   Fortran::parser::OmpObject, mlir::omp::DataBoundsOp,
