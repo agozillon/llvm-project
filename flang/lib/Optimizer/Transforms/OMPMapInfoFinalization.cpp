@@ -139,8 +139,11 @@ class OMPMapInfoFinalizationPass
         op->getLoc(), op.getResult().getType(), descriptor,
         mlir::TypeAttr::get(fir::unwrapRefType(descriptor.getType())),
         mlir::Value{}, mlir::SmallVector<mlir::Value>{baseAddr},
-        /*mlir::ArrayAttr::get(builder.getContext(),
-                             builder.getI64IntegerAttr(0))*/ mlir::DenseIntElementsAttr{} /*members_index*/,
+        mlir::DenseIntElementsAttr::get(
+            mlir::VectorType::get(
+                llvm::ArrayRef<int64_t>({1, 1}),
+                mlir::IntegerType::get(builder.getContext(), 32)),
+            llvm::ArrayRef<int32_t>({0})) /*members_index*/,
         mlir::SmallVector<mlir::Value>{},
         builder.getIntegerAttr(builder.getIntegerType(64, false),
                                op.getMapType().value()),

@@ -56,7 +56,7 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::Value baseAddr, mlir::Value varPtrPtr, std::string name,
                 mlir::SmallVector<mlir::Value> bounds,
                 mlir::SmallVector<mlir::Value> members,
-                mlir::ArrayAttr membersIndex, uint64_t mapType,
+                mlir::DenseIntElementsAttr membersIndex, uint64_t mapType,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool partialMap = false);
 
@@ -72,7 +72,8 @@ int findComponentMemberPlacement(
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
     std::map<const Fortran::semantics::Symbol *,
-             llvm::SmallVector<llvm::SmallVector<int>>> &parentMemberIndices,
+             llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
+        &parentMemberIndices,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
