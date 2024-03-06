@@ -72,14 +72,14 @@ int findComponentMemberPlacement(
 
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
-    llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
+    std::map<const Fortran::semantics::Symbol *,
+             llvm::SmallVector<llvm::SmallVector<int>>> &parentMemberIndices,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<llvm::SmallVector<int>> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols);
-    
+
 void gatherFuncAndVarSyms(
     const ObjectList &objects, mlir::omp::DeclareTargetCaptureClause clause,
     llvm::SmallVectorImpl<DeclareTargetCapturePair> &symbolAndClause);

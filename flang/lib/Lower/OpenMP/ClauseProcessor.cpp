@@ -826,8 +826,8 @@ bool ClauseProcessor::processMap(
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
 
   llvm::SmallVector<mlir::omp::MapInfoOp> memberMaps;
-  llvm::SmallVector<llvm::SmallVector<int>> memberPlacementIndices;
-  llvm::SmallVector<const Fortran::semantics::Symbol *> memberParentSyms;
+  std::map<const Fortran::semantics::Symbol *, 
+      llvm::SmallVector<llvm::SmallVector<int>>> parentMemberIndices;
 
   bool clauseFound = findRepeatableClause2<ClauseTy::Map>(
       [&](const ClauseTy::Map *mapClause,
@@ -891,8 +891,7 @@ bool ClauseProcessor::processMap(
             assert(designator && "Expected a designator from derived type "
                                  "component during map clause processing");
             parentSym = GetFirstName(*designator).symbol;
-            memberParentSyms.push_back(parentSym);
-            memberPlacementIndices.push_back(
+            parentMemberIndices[parentSym].push_back(
                 generateMemberPlacementIndices(ompObject));
           }
 

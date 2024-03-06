@@ -202,77 +202,80 @@ mlir::DenseIntElementsAttr createDenseElementsAttrFromIndices(
 
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
-    llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
+    std::map<const Fortran::semantics::Symbol *,
+             llvm::SmallVector<llvm::SmallVector<int>>> &parentMemberIndices,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<llvm::SmallVector<int>> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols) {
-  for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
-    bool parentExists = false;
-    size_t parentIdx = 0;
-    for (size_t i = 0; i < mapSymbols->size(); ++i) {
-      if ((*mapSymbols)[i] == sym) {
-        parentExists = true;
-        parentIdx = i;
-        break;
-      }
-    }
+  // for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
+  // }
 
-I think we will have to change the below, to create or append the mapinfoop at the end, and we 
-divide up the members indices between them all beforehand so we have to create the denseattr a minimal
-number of times. perhaps tracking a std::pair of map To member indices...
-    if (parentExists) {
-      auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapOperands[parentIdx].getDefiningOp());
-      assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
-                      "an expected MapInfoOp");
+  // for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
+//     bool parentExists = false;
+//     size_t parentIdx = 0;
+//     for (size_t i = 0; i < mapSymbols->size(); ++i) {
+//       if ((*mapSymbols)[i] == sym) {
+//         parentExists = true;
+//         parentIdx = i;
+//         break;
+//       }
+//     }
+
+// // I think we will have to change the below, to create or append the mapinfoop at the end, and we 
+// // divide up the members indices between them all beforehand so we have to create the denseattr a minimal
+// // number of times. perhaps tracking a std::pair of map To member indices...
+//     if (parentExists) {
+//       auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+//           mapOperands[parentIdx].getDefiningOp());
+//       assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
+//                       "an expected MapInfoOp");
 
 
 
-      // found a parent, append.
-      mapOp.getMembersMutable().append((mlir::Value)memberMaps[idx]);
+//       // found a parent, append.
+//       mapOp.getMembersMutable().append((mlir::Value)memberMaps[idx]);
 
-// this very likely won't work the same anymore... as it's no longer a single 1-D index
-        // mlir::DenseIntElementsAttr::get(
-        //     mlir::VectorType::get(llvm::ArrayRef<int64_t>(lShape),
-        //                           IntegerType::get(module.getContext(), 64)),
-        //     llvm::ArrayRef<int64_t>{lBounds})
+// // this very likely won't work the same anymore... as it's no longer a single 1-D index
+//         // mlir::DenseIntElementsAttr::get(
+//         //     mlir::VectorType::get(llvm::ArrayRef<int64_t>(lShape),
+//         //                           IntegerType::get(module.getContext(), 64)),
+//         //     llvm::ArrayRef<int64_t>{lBounds})
 
-      // llvm::SmallVector<mlir::Attribute> memberIndexTmp{
-      //     mapOp.getMembersIndexAttr().begin(),
-      //     mapOp.getMembersIndexAttr().end()};
-      // memberIndexTmp.push_back(memberPlacementIndices[idx]);
-      // mapOp.setMembersIndexAttr(mlir::DenseIntElementsAttr::get(
-      //     /*converter.getFirOpBuilder().getContext(), memberIndexTmp)*/);
-    } else {
-      // NOTE: We take the map type of the first child, this may not
-      // be the correct thing to do, however, we shall see. For the moment
-      // it allows this to work with enter and exit without causing MLIR
-      // verification issues. The more appropriate thing may be to take
-      // the "main" map type clause from the directive being used.
-      uint64_t mapType = memberMaps[idx].getMapType().value_or(0);
+//       // llvm::SmallVector<mlir::Attribute> memberIndexTmp{
+//       //     mapOp.getMembersIndexAttr().begin(),
+//       //     mapOp.getMembersIndexAttr().end()};
+//       // memberIndexTmp.push_back(memberPlacementIndices[idx]);
+//       // mapOp.setMembersIndexAttr(mlir::DenseIntElementsAttr::get(
+//       //     /*converter.getFirOpBuilder().getContext(), memberIndexTmp)*/);
+//     } else {
+//       // NOTE: We take the map type of the first child, this may not
+//       // be the correct thing to do, however, we shall see. For the moment
+//       // it allows this to work with enter and exit without causing MLIR
+//       // verification issues. The more appropriate thing may be to take
+//       // the "main" map type clause from the directive being used.
+//       uint64_t mapType = memberMaps[idx].getMapType().value_or(0);
 
-      // create parent to emplace and bind members
-      auto origSymbol = converter.getSymbolAddress(*sym);
-      mlir::Value mapOp = createMapInfoOp(
-          converter.getFirOpBuilder(), origSymbol.getLoc(), origSymbol,
-          mlir::Value(), sym->name().ToString(), {}, {memberMaps[idx]},
-          mlir::ArrayAttr{}/*mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
-                               memberPlacementIndices[idx])*/,
-          mapType, mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(),
-          true);
+//       // create parent to emplace and bind members
+//       auto origSymbol = converter.getSymbolAddress(*sym);
+//       mlir::Value mapOp = createMapInfoOp(
+//           converter.getFirOpBuilder(), origSymbol.getLoc(), origSymbol,
+//           mlir::Value(), sym->name().ToString(), {}, {memberMaps[idx]},
+//           mlir::ArrayAttr{}/*mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
+//                                memberPlacementIndices[idx])*/,
+//           mapType, mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(),
+//           true);
 
-      mapOperands.push_back(mapOp);
-      if (mapSymTypes)
-        mapSymTypes->push_back(mapOp.getType());
-      if (mapSymLocs)
-        mapSymLocs->push_back(mapOp.getLoc());
-      if (mapSymbols)
-        mapSymbols->push_back(sym);
-    }
-  }
+//       mapOperands.push_back(mapOp);
+//       if (mapSymTypes)
+//         mapSymTypes->push_back(mapOp.getType());
+//       if (mapSymLocs)
+//         mapSymLocs->push_back(mapOp.getLoc());
+//       if (mapSymbols)
+//         mapSymbols->push_back(sym);
+//     }
+  // }
 }
 
 Fortran::semantics::Symbol *
