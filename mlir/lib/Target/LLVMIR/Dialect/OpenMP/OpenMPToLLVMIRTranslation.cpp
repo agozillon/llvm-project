@@ -33,6 +33,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include <any>
+#include <cstdint>
 #include <numeric>
 #include <optional>
 #include <utility>
@@ -1993,26 +1994,71 @@ static int getMapDataMemberIdx(MapInfoData &mapData,
 static mlir::omp::MapInfoOp
 getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
   // Only 1 member has been mapped, we can return it.
-  // if (mapInfo.getMembersIndex()->size() == 1)
-  //   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-  //           mapInfo.getMembers()[0].getDefiningOp()))
-  //     return mapOp;
+  if (mapInfo.getMembersIndex()->size() == 1)
+    if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+            mapInfo.getMembers()[0].getDefiningOp()))
+      return mapOp;
 
-  // std::vector<size_t> indices(mapInfo.getMembersIndexAttr().size());
-  // std::iota(indices.begin(), indices.end(), 0);
-  // llvm::sort(indices.begin(), indices.end(),
-  //            [&](const size_t a, const size_t b) {
-  //              return mapInfo.getMembersIndexAttr()[a]
-  //                         .cast<mlir::IntegerAttr>()
-  //                         .getInt() < mapInfo.getMembersIndexAttr()[b]
-  //                                         .cast<mlir::IntegerAttr>()
-  //                                         .getInt();
-  //            });
+  std::vector<size_t> indices(
+      mapInfo.getMembersIndexAttr().getNumElements() /
+      mapInfo.getMembersIndexAttr().getShapedType().getShape()[0]);
+  std::iota(indices.begin(), indices.end(), 0);
 
-  // if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-  //         mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
-  //             .getDefiningOp()))
-  //   return mapOp;
+  llvm::errs() << "Shape[0] : " << mapInfo.getMembersIndexAttr().getShapedType().getShape()[0] << "\n";
+  llvm::errs() << "num elements: " << mapInfo.getMembersIndexAttr().getNumElements() << "\n";
+  // llvm::errs() << "sizes of attr: " << mapInfo.getMembersIndexAttr().size() << "\n";
+  // llvm::errs() << "sizes: " << mapInfo.getMembersIndexAttr().getValues<int32_t>().size() << "\n";
+
+  llvm::sort(
+      indices.begin(), indices.end(), [&](const size_t a, const size_t b) {
+        
+        // need to factor in -ve values. 
+        for (int i = 0;
+             i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1];
+             ++i) {
+            int aIndex = mapInfo.getMembersIndexAttr()
+                  .getValues<int32_t>()[a * mapInfo.getMembersIndexAttr()
+                                                .getShapedType()
+                                                .getShape()[1] +
+                                        i];
+            int bIndex = mapInfo.getMembersIndexAttr()
+                  .getValues<int32_t>()[b * mapInfo.getMembersIndexAttr()
+                                                .getShapedType()
+                                                .getShape()[1] +
+                                        i];
+
+          // As we have iterated to a stage where both indices are invalid
+          // we likely have the same member index, possibly the same member 
+          // being mapped, return the first. 
+          if (aIndex == -1 && bIndex == -1)
+            return true;
+
+          if (aIndex == -1)
+            return true;
+
+          if (bIndex == -1)
+            return false;
+
+          // A is earlier in the record type layout than B
+          if (aIndex < bIndex)
+            return true;
+   
+          if (bIndex < aIndex)
+            return false;
+        }
+
+        // iterated the entire list and couldn't make a decision, all elements
+        // were likely the same, return true for now similar to reaching the end
+        // of both and finding invalid indices.
+        return true;
+      });
+
+  llvm::errs() << "first index: " << indices.front() << "\n";
+  llvm::errs() << "last index: " << indices.back() << "\n";
+  if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
+          mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
+              .getDefiningOp()))
+    return mapOp;
 
   assert(false && "getFirstOrLastMappedMemberPtr could not find approproaite "
                   "map information");

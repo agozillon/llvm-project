@@ -199,7 +199,8 @@ bool ClauseProcessor::processMotionClauses(
     llvm::SmallVectorImpl<mlir::Value> &mapOperands) {
   llvm::SmallVector<mlir::omp::MapInfoOp> memberMaps;
   std::map<const Fortran::semantics::Symbol *, 
-      llvm::SmallVector<llvm::SmallVector<int>>> parentMemberIndices;
+      llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>> parentMemberIndices;
+  llvm::SmallVector<const Fortran::semantics::Symbol *> mapSymbols;
 
   bool clauseFound = findRepeatableClause2<T>(
       [&](const T *motionClause, const Fortran::parser::CharBlock &source) {
@@ -231,8 +232,8 @@ bool ClauseProcessor::processMotionClauses(
             assert(designator && "Expected a designator from derived type "
                                  "component during motion clause processing");
             parentSym = GetFirstName(*designator).symbol;
-            parentMemberIndices[parentSym].push_back(
-                generateMemberPlacementIndices(ompObject));
+            parentMemberIndices[parentSym].push_back(std::make_pair(
+                generateMemberPlacementIndices(ompObject), memberMaps.size()));
           }
 
           Fortran::lower::AddrAndBoundsInfo info =
@@ -253,7 +254,7 @@ bool ClauseProcessor::processMotionClauses(
           // types to optimise
           mlir::omp::MapInfoOp mapOp = createMapInfoOp(
               firOpBuilder, clauseLocation, symAddr, mlir::Value{},
-              asFortran.str(), bounds, {}, mlir::ArrayAttr{},
+              asFortran.str(), bounds, {}, mlir::DenseIntElementsAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   objectsMapTypeBits),
@@ -268,8 +269,8 @@ bool ClauseProcessor::processMotionClauses(
         }
       });
 
-  insertChildMapInfoIntoParent(converter, memberParentSyms, memberMaps,
-                               memberPlacementIndices, mapOperands, nullptr,
+  insertChildMapInfoIntoParent(converter, parentMemberIndices, memberMaps,
+                                mapOperands, nullptr,
                                nullptr, &mapSymbols);
   return clauseFound;
 }
