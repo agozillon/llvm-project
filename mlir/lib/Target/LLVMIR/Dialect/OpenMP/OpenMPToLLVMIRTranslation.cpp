@@ -1955,19 +1955,11 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
       return mapOp;
 
   std::vector<size_t> indices(
-      mapInfo.getMembersIndexAttr().getNumElements() /
       mapInfo.getMembersIndexAttr().getShapedType().getShape()[0]);
   std::iota(indices.begin(), indices.end(), 0);
 
-  llvm::errs() << "Shape[0] : " << mapInfo.getMembersIndexAttr().getShapedType().getShape()[0] << "\n";
-  llvm::errs() << "num elements: " << mapInfo.getMembersIndexAttr().getNumElements() << "\n";
-  // llvm::errs() << "sizes of attr: " << mapInfo.getMembersIndexAttr().size() << "\n";
-  // llvm::errs() << "sizes: " << mapInfo.getMembersIndexAttr().getValues<int32_t>().size() << "\n";
-
   llvm::sort(
       indices.begin(), indices.end(), [&](const size_t a, const size_t b) {
-        
-        // need to factor in -ve values. 
         for (int i = 0;
              i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1];
              ++i) {
@@ -2008,8 +2000,6 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
         return true;
       });
 
-  llvm::errs() << "first index: " << indices.front() << "\n";
-  llvm::errs() << "last index: " << indices.back() << "\n";
   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
           mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
               .getDefiningOp()))

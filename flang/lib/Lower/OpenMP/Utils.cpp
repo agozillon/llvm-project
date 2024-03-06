@@ -192,7 +192,7 @@ static void calculateShapeAndFillIndices(
   // DenseElementsAttr expects a rectangular shape for the data, so all
   // index lists have to be of the same length, this implaces -1 as filler
   // values
-  for (auto v : memberPlacementIndices)
+  for (auto& v : memberPlacementIndices)
     if (std::get<0>(v).size() < largestIndexSetSize) {
       auto *prevEnd = std::get<0>(v).end();
       std::get<0>(v).resize(largestIndexSetSize);
