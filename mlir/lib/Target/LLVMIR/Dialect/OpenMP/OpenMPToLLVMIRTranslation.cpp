@@ -2295,21 +2295,27 @@ static void processMapWithMembersOf(
     uint64_t mapDataIndex, bool isTargetParams) {
   auto parentClause =
       mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+      
   // If we have a partial map (no parent referneced in the map clauses of the
   // directive, only members) and only a single member, we do not need to bind
   // the map of the member to the parent, we can pass the member seperately.
   if (parentClause.getMembers().size() == 1 && parentClause.getPartialMap()) {
     auto memberClause = mlir::dyn_cast<mlir::omp::MapInfoOp>(
         parentClause.getMembers()[0].getDefiningOp());
-    int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
-    // Primarily only scalars can be optimised this way it seems, array's
-    // need to be mapped as a regular record <-> member map even if partially
-    // mapping.
-    if (!mapData.BaseType[memberDataIdx]->isArrayTy()) {
+      int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
+      // Note: Clang treats arrays with explicit bounds that fall into this 
+      // category as a parent with map case, however, it seems this isn't a 
+      // requirement, and processing them as an individual map is fine. So,
+      // we will handle them as individual maps for the moment, as it's 
+      // difficult for us to check this as we always require bounds to be 
+      // specified currently and it's also marginally more optimal (single 
+      // map rather than two). The difference may come from the fact that 
+      // Clang maps array without bounds as pointers (which we do not 
+      // currently do), whereas we treat them as arrays in all cases 
+      // currently. 
       processIndividualMap(mapData, memberDataIdx, combinedInfo, isTargetParams,
                            mapDataIndex);
       return;
-    }
   }
 
   llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
