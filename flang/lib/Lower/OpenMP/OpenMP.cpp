@@ -1208,8 +1208,6 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
           mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
         }
 
-        checkAndApplyDeclTargetMapFlags(converter, mapFlag, sym);
-
         mlir::Value mapOp = createMapInfoOp(
             converter.getFirOpBuilder(), baseOp.getLoc(), baseOp, mlir::Value{},
             name.str(), bounds, {}, mlir::DenseIntElementsAttr{},
