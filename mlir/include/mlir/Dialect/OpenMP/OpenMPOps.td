@@ -1377,7 +1377,7 @@ def MapInfoOp : OpenMP_Op<"map_info", [AttrSizedOperandSegments]> {
         `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
       | `map_clauses` `(` custom<MapClause>($map_type) `)`
       | `capture` `(` custom<CaptureType>($map_capture_type) `)`
-      | `members` `(` $members `:` type($members) `:` $members_index `)`
+      | `members` `(` $members `:` custom<MembersIndex>($members_index) `:` type($members) `)`
       | `bounds` `(` $bounds `)`
     ) `->` type($omp_ptr) attr-dict
   }];
