@@ -925,11 +925,7 @@ bool ClauseProcessor::processMap(
         }
 
         for (const Fortran::parser::OmpObject &ompObject :
-             std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {
-          llvm::omp::OpenMPOffloadMappingFlags objectsMapTypeBits = mapTypeBits;
-          checkAndApplyDeclTargetMapFlags(converter, objectsMapTypeBits,
-                                          *getOmpObjectSymbol(ompObject));
-
+             std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {          
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
           const Fortran::semantics::Symbol *parentSym = nullptr;
@@ -966,7 +962,7 @@ bool ClauseProcessor::processMap(
               asFortran.str(), bounds, {}, mlir::DenseIntElementsAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-                  objectsMapTypeBits),
+                  mapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
           if (parentSym) {

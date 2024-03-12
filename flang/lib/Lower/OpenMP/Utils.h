@@ -60,11 +60,6 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool partialMap = false);
 
-void checkAndApplyDeclTargetMapFlags(
-    Fortran::lower::AbstractConverter &converter,
-    llvm::omp::OpenMPOffloadMappingFlags &mapFlags,
-    const Fortran::semantics::Symbol &symbol);
-
 int findComponentMemberPlacement(
     const Fortran::semantics::Symbol *dTypeSym,
     const Fortran::semantics::Symbol *componentSym);

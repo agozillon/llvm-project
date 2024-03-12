@@ -86,24 +86,16 @@ class OMPMapInfoFinalizationPass
     mlir::Value baseAddrAddr = builder.create<fir::BoxOffsetOp>(
         loc, descriptor, fir::BoxFieldAttr::base_addr);
 
-    llvm::omp::OpenMPOffloadMappingFlags baseAddrMapFlag =
-        llvm::omp::OpenMPOffloadMappingFlags(op.getMapType().value());
-    baseAddrMapFlag |=
-        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-
     // Member of the descriptor pointing at the allocated data
     mlir::Value baseAddr = builder.create<mlir::omp::MapInfoOp>(
         loc, baseAddrAddr.getType(), descriptor,
         mlir::TypeAttr::get(llvm::cast<mlir::omp::PointerLikeType>(
                                 fir::unwrapRefType(baseAddrAddr.getType()))
                                 .getElementType()),
-        baseAddrAddr, mlir::SmallVector<mlir::Value>{}, mlir::DenseIntElementsAttr{},
-        op.getBounds(),
-        builder.getIntegerAttr(
-            builder.getIntegerType(64, false),
-            static_cast<
-                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-                baseAddrMapFlag)),
+        baseAddrAddr, mlir::SmallVector<mlir::Value>{},
+        mlir::DenseIntElementsAttr{}, op.getBounds(),
+        builder.getIntegerAttr(builder.getIntegerType(64, false),
+                               op.getMapType().value()),
         builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
             mlir::omp::VariableCaptureKind::ByRef),
         builder.getStringAttr("") /*name*/,
