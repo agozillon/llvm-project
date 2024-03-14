@@ -198,16 +198,17 @@ class OMPMapInfoFinalizationPass
     for (size_t i = 0; i < mapOperandsArr.size(); ++i) {
       if (mapOperandsArr[i] == op) {
         // Push member maps
-        for (auto member : op.getMembers()) {
-          newMapOps.push_back(member);
+        for (size_t j = 0; j < op.getMembers().size(); ++j) {
+          newMapOps.push_back(op.getMembers()[j]);
           // for TargetOp's which have IsolatedFromAbove we must align the
           // new additional map operand with an appropriate BlockArgument,
           // as the printing and later processing currently requires a 1:1
           // mapping of BlockArgs to MapInfoOp's at the same placement in
           // each array (BlockArgs and MapOperands).
-          if (auto targetOp = llvm::dyn_cast<mlir::omp::TargetOp>(target))
-            targetOp.getRegion().insertArgument(i, member.getType(),
-                                                builder.getUnknownLoc());
+          if (auto targetOp = llvm::dyn_cast<mlir::omp::TargetOp>(target)) {
+            targetOp.getRegion().insertArgument(
+                i + j, op.getMembers()[j].getType(), builder.getUnknownLoc());
+          }
         }
       }
       newMapOps.push_back(mapOperandsArr[i]);

@@ -66,3 +66,34 @@ module attributes {omp.is_target_device = false} {
 // CHECK:   %[[MAP_PARENT:.*]] = omp.map_info var_ptr(%{{.*}} : !fir.ref<!fir.type<_QFTdtype{ix:i32,rx:f32,zx:!fir.complex<4>,nested:!fir.box<!fir.heap<!fir.type<_QFTdtype>>>,ry:f32}>>, !fir.type<_QFTdtype{ix:i32,rx:f32,zx:!fir.complex<4>,nested:!fir.box<!fir.heap<!fir.type<_QFTdtype>>>,ry:f32}>) map_clauses(from) capture(ByRef) members(%[[MAP_MEMBER_1]], %[[MAP_MEMBER_2]] : [1], [4] : !fir.ref<f32>, !fir.ref<f32>) -> !fir.ref<!fir.type<_QFTdtype{ix:i32,rx:f32,zx:!fir.complex<4>,nested:!fir.box<!fir.heap<!fir.type<_QFTdtype>>>,ry:f32}>> {name = "scalar_struct", partial_map = true}
 // CHECK:   omp.target map_entries(%[[MAP_MEMBER_1]] -> %[[ARG1:.*]], %[[MAP_MEMBER_2]] -> %[[ARG2:.*]], %[[MAP_PARENT]] -> %[[ARG3:.*]] : !fir.ref<f32>, !fir.ref<f32>, !fir.ref<!fir.type<_QFTdtype{ix:i32,rx:f32,zx:!fir.complex<4>,nested:!fir.box<!fir.heap<!fir.type<_QFTdtype>>>,ry:f32}>>) {
 // CHECK:     ^bb0(%[[ARG1]]: !fir.ref<f32>, %[[ARG2]]: !fir.ref<f32>, %[[ARG3]]: !fir.ref<!fir.type<_QFTdtype{ix:i32,rx:f32,zx:!fir.complex<4>,nested:!fir.box<!fir.heap<!fir.type<_QFTdtype>>>,ry:f32}>>):
+
+// -----
+
+module attributes {omp.is_target_device = false} {
+func.func @test_nested_derived_type_map_operand_and_block_addition(%arg0: !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>) {        
+    %0 = fir.declare %arg0 {uniq_name = "_QFmaptype_derived_nested_explicit_multiple_membersEsa"} : (!fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>) -> !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>
+    %1 = fir.field_index n, !fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>
+    %2 = fir.coordinate_of %0, %1 : (!fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>, !fir.field) -> !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>>
+    %3 = fir.field_index i, !fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>
+    %4 = fir.coordinate_of %2, %3 : (!fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>>, !fir.field) -> !fir.ref<i32>
+    %5 = omp.map_info var_ptr(%4 : !fir.ref<i32>, i32) map_clauses(tofrom) capture(ByRef) -> !fir.ref<i32> {name = "sa%n%i"}
+    %6 = fir.field_index n, !fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>
+    %7 = fir.coordinate_of %0, %6 : (!fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>, !fir.field) -> !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>>
+    %8 = fir.field_index r, !fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>
+    %9 = fir.coordinate_of %7, %8 : (!fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>>, !fir.field) -> !fir.ref<f32>
+    %10 = omp.map_info var_ptr(%9 : !fir.ref<f32>, f32) map_clauses(tofrom) capture(ByRef) -> !fir.ref<f32> {name = "sa%n%r"}
+    %11 = omp.map_info var_ptr(%0 : !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>, !fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>) map_clauses(tofrom) capture(ByRef) members(%5, %10 : [1,0], [1,1] : !fir.ref<i32>, !fir.ref<f32>) -> !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>> {name = "sa", partial_map = true}
+    omp.target map_entries(%11 -> %arg1 : !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>) {
+    ^bb0(%arg1: !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>):
+      omp.terminator
+    }
+    return
+  }
+}
+
+// CHECK: func.func @test_nested_derived_type_map_operand_and_block_addition(%{{.*}}: !fir.ref<!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTscalar_and_array{r:f32,n:!fir.type<_QFmaptype_derived_nested_explicit_multiple_membersTnested{i:i32,r:f32}>}>>) { 
+// CHECK:   %[[MAP_MEMBER_1:.*]] = omp.map_info var_ptr(%{{.*}} : !fir.ref<i32>, i32) map_clauses(tofrom) capture(ByRef) -> !fir.ref<i32> {name = "sa%n%i"}
+// CHECK:   %[[MAP_MEMBER_2:.*]] = omp.map_info var_ptr(%{{.*}} : !fir.ref<f32>, f32) map_clauses(tofrom) capture(ByRef) -> !fir.ref<f32> {name = "sa%n%r"}
+// CHECK:   %[[MAP_PARENT:.*]] = omp.map_info var_ptr(%{{.*}} : {{.*}}, {{.*}}) map_clauses(tofrom) capture(ByRef) members(%[[MAP_MEMBER_1]], %[[MAP_MEMBER_2]] : [1,0], [1,1] : !fir.ref<i32>, !fir.ref<f32>) -> {{.*}} {name = "sa", partial_map = true}
+// CHECK:   omp.target map_entries(%[[MAP_MEMBER_1]] -> %[[ARG1:.*]], %[[MAP_MEMBER_2]] -> %[[ARG2:.*]], %[[MAP_PARENT]] -> %[[ARG3:.*]] : !fir.ref<i32>, !fir.ref<f32>, {{.*}}) {
+// CHECK:     ^bb0(%[[ARG1]]: !fir.ref<i32>, %[[ARG2]]: !fir.ref<f32>, %[[ARG3]]: {{.*}}):
