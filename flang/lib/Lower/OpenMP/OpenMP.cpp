@@ -1061,7 +1061,8 @@ static void genBodyOfTargetOp(
         firOpBuilder.setInsertionPoint(targetOp);
         mlir::Value mapOp = createMapInfoOp(
             firOpBuilder, copyVal.getLoc(), copyVal, mlir::Value{}, name.str(),
-            bounds, llvm::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
+            bounds, llvm::SmallVector<mlir::Value>{},
+            mlir::DenseIntElementsAttr{},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT),
@@ -1208,11 +1209,9 @@ genTargetOp(Fortran::lower::AbstractConverter &converter,
           mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
         }
 
-        checkAndApplyDeclTargetMapFlags(converter, mapFlag, sym);
-
         mlir::Value mapOp = createMapInfoOp(
             converter.getFirOpBuilder(), baseOp.getLoc(), baseOp, mlir::Value{},
-            name.str(), bounds, {}, mlir::ArrayAttr{},
+            name.str(), bounds, {}, mlir::DenseIntElementsAttr{},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 mapFlag),

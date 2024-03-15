@@ -14,6 +14,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "llvm/Support/CommandLine.h"
+#include <list>
 
 extern llvm::cl::opt<bool> treatIndexAsSection;
 extern llvm::cl::opt<bool> enableDelayedPrivatization;
@@ -35,6 +36,7 @@ class Symbol;
 namespace parser {
 struct OmpObject;
 struct OmpObjectList;
+struct Designator;
 } // namespace parser
 
 namespace lower {
@@ -47,19 +49,17 @@ using DeclareTargetCapturePair =
     std::pair<mlir::omp::DeclareTargetCaptureClause,
               const Fortran::semantics::Symbol &>;
 
+llvm::SmallVector<int>
+generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject);
+
 mlir::omp::MapInfoOp
 createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::Value baseAddr, mlir::Value varPtrPtr, std::string name,
                 mlir::SmallVector<mlir::Value> bounds,
                 mlir::SmallVector<mlir::Value> members,
-                mlir::ArrayAttr membersIndex, uint64_t mapType,
+                mlir::DenseIntElementsAttr membersIndex, uint64_t mapType,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool partialMap = false);
-
-void checkAndApplyDeclTargetMapFlags(
-    Fortran::lower::AbstractConverter &converter,
-    llvm::omp::OpenMPOffloadMappingFlags &mapFlags,
-    const Fortran::semantics::Symbol &symbol);
 
 int findComponentMemberPlacement(
     const Fortran::semantics::Symbol *dTypeSym,
@@ -67,14 +67,15 @@ int findComponentMemberPlacement(
 
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
-    llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
+    std::map<const Fortran::semantics::Symbol *,
+             llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
+        &parentMemberIndices,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<mlir::Attribute> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols);
-    
+
 void gatherFuncAndVarSyms(
     const ObjectList &objects, mlir::omp::DeclareTargetCaptureClause clause,
     llvm::SmallVectorImpl<DeclareTargetCapturePair> &symbolAndClause);

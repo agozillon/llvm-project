@@ -13,6 +13,7 @@
 #include "Utils.h"
 #include "Clauses.h"
 
+#include <cstdint>
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Optimizer/Builder/FIRBuilder.h>
@@ -20,6 +21,7 @@
 #include <flang/Parser/tools.h>
 #include <flang/Semantics/tools.h>
 #include <llvm/Support/CommandLine.h>
+#include <numeric>
 
 llvm::cl::opt<bool> treatIndexAsSection(
     "openmp-treat-index-as-section",
@@ -78,29 +80,11 @@ void gatherFuncAndVarSyms(
     symbolAndClause.emplace_back(clause, *object.id());
 }
 
-void checkAndApplyDeclTargetMapFlags(
-    Fortran::lower::AbstractConverter &converter,
-    llvm::omp::OpenMPOffloadMappingFlags &mapFlags,
-    const Fortran::semantics::Symbol &symbol) {
-  if (auto declareTargetOp =
-          llvm::dyn_cast_if_present<mlir::omp::DeclareTargetInterface>(
-              converter.getModuleOp().lookupSymbol(
-                  converter.mangleName(symbol)))) {
-    // Only Link clauses have OMP_MAP_PTR_AND_OBJ applied, To clause
-    // seems to function differently.
-    if (declareTargetOp.getDeclareTargetCaptureClause() ==
-        mlir::omp::DeclareTargetCaptureClause::link)
-      mapFlags |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-  }
-}
-
 int findComponentMemberPlacement(
     const Fortran::semantics::Symbol *dTypeSym,
     const Fortran::semantics::Symbol *componentSym) {
   const auto *derived =
       dTypeSym->detailsIf<Fortran::semantics::DerivedTypeDetails>();
-  if (!derived)
-    return -1;
 
   int placement = 0;
   for (auto t : derived->componentNames()) {
@@ -112,27 +96,138 @@ int findComponentMemberPlacement(
   return -1;
 }
 
+const parser::StructureComponent *getStructComp(const parser::DataRef &x) {
+  const parser::StructureComponent *comp = nullptr;
+  common::visit(
+      common::visitors{
+          [&](const parser::Name &name) { comp = nullptr; },
+          [&](const common::Indirection<parser::StructureComponent> &sc) {
+            comp = &sc.value();
+          },
+          [&](const common::Indirection<parser::ArrayElement> &ae) {
+            comp = getStructComp(ae.value().base);
+          },
+          [&](const common::Indirection<parser::CoindexedNamedObject> &ci) {
+            comp = getStructComp(ci.value().base);
+          },
+      },
+      x.u);
+
+  return comp;
+}
+
+const parser::StructureComponent *getStructComp(const parser::Substring &x) {
+  return getStructComp(std::get<parser::DataRef>(x.t));
+}
+
+const parser::StructureComponent *getStructComp(const parser::Designator &x) {
+  const parser::StructureComponent *comp = nullptr;
+  common::visit(
+      common::visitors{
+          [&](const auto &y) { comp = getStructComp(y); },
+      },
+      x.u);
+  return comp;
+}
+
+int getComponentPlacementInParent(
+    const Fortran::semantics::Symbol *componentSym) {
+  const auto *derived =
+      componentSym->owner()
+          .derivedTypeSpec()
+          ->typeSymbol()
+          .detailsIf<Fortran::semantics::DerivedTypeDetails>();
+
+  int placement = 0;
+  for (auto t : derived->componentNames()) {
+    if (t == componentSym->name())
+      return placement;
+    placement++;
+  }
+
+  return -1;
+}
+
+llvm::SmallVector<int>
+generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject) {
+  assert(getOmpObjectSymbol(ompObject)->owner().IsDerivedType() &&
+         "Expected an OmpObject that was a component of a derived type");
+  const auto *designator =
+      Fortran::parser::Unwrap<Fortran::parser::Designator>(ompObject.u);
+  assert(designator && "Expected a designator from derived type "
+                       "component during map clause processing");
+  const Fortran::parser::StructureComponent *curComp =
+      getStructComp(*designator);
+
+  std::list<int> indices;
+  while (curComp) {
+    indices.push_front(
+        getComponentPlacementInParent(curComp->component.symbol));
+    curComp = getStructComp(curComp->base);
+  }
+
+  return llvm::SmallVector<int>{std::begin(indices), std::end(indices)};
+}
+
+static void calculateShapeAndFillIndices(
+    llvm::SmallVectorImpl<int64_t> &shape,
+    llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>
+        &memberPlacementIndices) {
+  shape.push_back(memberPlacementIndices.size());
+  size_t largestIndexSetSize = 0;
+  for (auto v : memberPlacementIndices)
+    if (std::get<0>(v).size() > largestIndexSetSize)
+      largestIndexSetSize = std::get<0>(v).size();
+  shape.push_back(largestIndexSetSize);
+
+  // DenseElementsAttr expects a rectangular shape for the data, so all
+  // index lists have to be of the same length, this implaces -1 as filler
+  // values
+  for (auto &v : memberPlacementIndices)
+    if (std::get<0>(v).size() < largestIndexSetSize) {
+      auto *prevEnd = std::get<0>(v).end();
+      std::get<0>(v).resize(largestIndexSetSize);
+      std::fill(prevEnd, std::get<0>(v).end(), -1);
+    }
+}
+
+mlir::DenseIntElementsAttr createDenseElementsAttrFromIndices(
+    llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>
+        &memberPlacementIndices,
+    fir::FirOpBuilder &builder) {
+  llvm::SmallVector<int64_t> shape;
+  calculateShapeAndFillIndices(shape, memberPlacementIndices);
+
+  llvm::SmallVector<int> indicesFlattened = std::accumulate(
+      memberPlacementIndices.begin(), memberPlacementIndices.end(),
+      llvm::SmallVector<int>(),
+      [](llvm::SmallVector<int> &x, std::pair<llvm::SmallVector<int>, int> &y) {
+        x.insert(x.end(), std::get<0>(y).begin(), std::get<0>(y).end());
+        return x;
+      });
+
+  return mlir::DenseIntElementsAttr::get(
+      mlir::VectorType::get(llvm::ArrayRef<int64_t>(shape),
+                            mlir::IntegerType::get(builder.getContext(), 32)),
+      llvm::ArrayRef<int32_t>(indicesFlattened));
+}
+
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
-    llvm::SmallVector<const Fortran::semantics::Symbol *> &memberParentSyms,
+    std::map<const Fortran::semantics::Symbol *,
+             llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
+        &parentMemberIndices,
     llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
-    llvm::SmallVector<mlir::Attribute> &memberPlacementIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols) {
-  // TODO: For multi-nested record types the top level parent is currently
-  // the containing parent for all member operations.
-  for (auto [idx, sym] : llvm::enumerate(memberParentSyms)) {
+  for (auto indices : parentMemberIndices) {
     bool parentExists = false;
-    size_t parentIdx = 0;
-    for (size_t i = 0; i < mapSymbols->size(); ++i) {
-      if ((*mapSymbols)[i] == sym) {
+    size_t parentIdx;
+    for (parentIdx = 0; parentIdx < mapSymbols->size(); ++parentIdx)
+      if ((*mapSymbols)[parentIdx] == indices.first)
         parentExists = true;
-        parentIdx = i;
-        break;
-      }
-    }
 
     if (parentExists) {
       auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
@@ -140,29 +235,33 @@ void insertChildMapInfoIntoParent(
       assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
                       "an expected MapInfoOp");
 
-      // found a parent, append.
-      mapOp.getMembersMutable().append((mlir::Value)memberMaps[idx]);
-      llvm::SmallVector<mlir::Attribute> memberIndexTmp{
-          mapOp.getMembersIndexAttr().begin(),
-          mapOp.getMembersIndexAttr().end()};
-      memberIndexTmp.push_back(memberPlacementIndices[idx]);
-      mapOp.setMembersIndexAttr(mlir::ArrayAttr::get(
-          converter.getFirOpBuilder().getContext(), memberIndexTmp));
+      for (auto pair : indices.second)
+        mapOp.getMembersMutable().append(
+            (mlir::Value)memberMaps[std::get<1>(pair)]);
+
+      mapOp.setMembersIndexAttr(createDenseElementsAttrFromIndices(
+          indices.second, converter.getFirOpBuilder()));
     } else {
       // NOTE: We take the map type of the first child, this may not
       // be the correct thing to do, however, we shall see. For the moment
       // it allows this to work with enter and exit without causing MLIR
       // verification issues. The more appropriate thing may be to take
       // the "main" map type clause from the directive being used.
-      uint64_t mapType = memberMaps[idx].getMapType().value_or(0);
+      uint64_t mapType =
+          memberMaps[std::get<1>(indices.second[0])].getMapType().value_or(0);
 
       // create parent to emplace and bind members
-      auto origSymbol = converter.getSymbolAddress(*sym);
+      auto origSymbol = converter.getSymbolAddress(*indices.first);
+
+      llvm::SmallVector<mlir::Value> members;
+      for (auto pair : indices.second)
+        members.push_back((mlir::Value)memberMaps[std::get<1>(pair)]);
+
       mlir::Value mapOp = createMapInfoOp(
           converter.getFirOpBuilder(), origSymbol.getLoc(), origSymbol,
-          mlir::Value(), sym->name().ToString(), {}, {memberMaps[idx]},
-          mlir::ArrayAttr::get(converter.getFirOpBuilder().getContext(),
-                               memberPlacementIndices[idx]),
+          mlir::Value(), indices.first->name().ToString(), {}, members,
+          createDenseElementsAttrFromIndices(indices.second,
+                                             converter.getFirOpBuilder()),
           mapType, mlir::omp::VariableCaptureKind::ByRef, origSymbol.getType(),
           true);
 
@@ -172,7 +271,7 @@ void insertChildMapInfoIntoParent(
       if (mapSymLocs)
         mapSymLocs->push_back(mapOp.getLoc());
       if (mapSymbols)
-        mapSymbols->push_back(sym);
+        mapSymbols->push_back(indices.first);
     }
   }
 }
