@@ -13,7 +13,7 @@
 #include "Utils.h"
 #include "Clauses.h"
 
-#include <cstdint>
+#include <algorithm>
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Optimizer/Builder/FIRBuilder.h>
@@ -21,6 +21,7 @@
 #include <flang/Parser/tools.h>
 #include <flang/Semantics/tools.h>
 #include <llvm/Support/CommandLine.h>
+
 #include <numeric>
 
 llvm::cl::opt<bool> treatIndexAsSection(
@@ -80,22 +81,6 @@ void gatherFuncAndVarSyms(
     symbolAndClause.emplace_back(clause, *object.id());
 }
 
-int findComponentMemberPlacement(
-    const Fortran::semantics::Symbol *dTypeSym,
-    const Fortran::semantics::Symbol *componentSym) {
-  const auto *derived =
-      dTypeSym->detailsIf<Fortran::semantics::DerivedTypeDetails>();
-
-  int placement = 0;
-  for (auto t : derived->componentNames()) {
-    if (t == componentSym->name())
-      return placement;
-    placement++;
-  }
-
-  return -1;
-}
-
 const parser::StructureComponent *getStructComp(const parser::DataRef &x) {
   const parser::StructureComponent *comp = nullptr;
   common::visit(
@@ -138,6 +123,9 @@ int getComponentPlacementInParent(
           ->typeSymbol()
           .detailsIf<Fortran::semantics::DerivedTypeDetails>();
 
+  assert(derived &&
+         "expected derived type details when processing component symbol");
+
   int placement = 0;
   for (auto t : derived->componentNames()) {
     if (t == componentSym->name())
@@ -171,38 +159,40 @@ generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject) {
 
 static void calculateShapeAndFillIndices(
     llvm::SmallVectorImpl<int64_t> &shape,
-    llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>
-        &memberPlacementIndices) {
-  shape.push_back(memberPlacementIndices.size());
-  size_t largestIndexSetSize = 0;
-  for (auto v : memberPlacementIndices)
-    if (std::get<0>(v).size() > largestIndexSetSize)
-      largestIndexSetSize = std::get<0>(v).size();
-  shape.push_back(largestIndexSetSize);
+    llvm::SmallVector<OmpMapMemberIndicesData> &memberPlacementData) {
+  shape.push_back(memberPlacementData.size());
+  size_t largestIndicesSize =
+      std::max_element(memberPlacementData.begin(), memberPlacementData.end(),
+                       [](auto a, auto b) {
+                         return a.memberPlacementIndices.size() <
+                                b.memberPlacementIndices.size();
+                       })
+          ->memberPlacementIndices.size();
+  shape.push_back(largestIndicesSize);
 
   // DenseElementsAttr expects a rectangular shape for the data, so all
   // index lists have to be of the same length, this implaces -1 as filler
   // values
-  for (auto &v : memberPlacementIndices)
-    if (std::get<0>(v).size() < largestIndexSetSize) {
-      auto *prevEnd = std::get<0>(v).end();
-      std::get<0>(v).resize(largestIndexSetSize);
-      std::fill(prevEnd, std::get<0>(v).end(), -1);
+  for (auto &v : memberPlacementData)
+    if (v.memberPlacementIndices.size() < largestIndicesSize) {
+      auto *prevEnd = v.memberPlacementIndices.end();
+      v.memberPlacementIndices.resize(largestIndicesSize);
+      std::fill(prevEnd, v.memberPlacementIndices.end(), -1);
     }
 }
 
 mlir::DenseIntElementsAttr createDenseElementsAttrFromIndices(
-    llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>
-        &memberPlacementIndices,
+    llvm::SmallVector<OmpMapMemberIndicesData> &memberPlacementData,
     fir::FirOpBuilder &builder) {
   llvm::SmallVector<int64_t> shape;
-  calculateShapeAndFillIndices(shape, memberPlacementIndices);
+  calculateShapeAndFillIndices(shape, memberPlacementData);
 
   llvm::SmallVector<int> indicesFlattened = std::accumulate(
-      memberPlacementIndices.begin(), memberPlacementIndices.end(),
+      memberPlacementData.begin(), memberPlacementData.end(),
       llvm::SmallVector<int>(),
-      [](llvm::SmallVector<int> &x, std::pair<llvm::SmallVector<int>, int> &y) {
-        x.insert(x.end(), std::get<0>(y).begin(), std::get<0>(y).end());
+      [](llvm::SmallVector<int> &x, OmpMapMemberIndicesData &y) {
+        x.insert(x.end(), y.memberPlacementIndices.begin(),
+                 y.memberPlacementIndices.end());
         return x;
       });
 
@@ -215,9 +205,7 @@ mlir::DenseIntElementsAttr createDenseElementsAttrFromIndices(
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
     std::map<const Fortran::semantics::Symbol *,
-             llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
-        &parentMemberIndices,
-    llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
+             llvm::SmallVector<OmpMapMemberIndicesData>> &parentMemberIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
@@ -235,9 +223,9 @@ void insertChildMapInfoIntoParent(
       assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
                       "an expected MapInfoOp");
 
-      for (auto pair : indices.second)
+      for (auto memberIndicesData : indices.second)
         mapOp.getMembersMutable().append(
-            (mlir::Value)memberMaps[std::get<1>(pair)]);
+            (mlir::Value)memberIndicesData.memberMap);
 
       mapOp.setMembersIndexAttr(createDenseElementsAttrFromIndices(
           indices.second, converter.getFirOpBuilder()));
@@ -247,15 +235,14 @@ void insertChildMapInfoIntoParent(
       // it allows this to work with enter and exit without causing MLIR
       // verification issues. The more appropriate thing may be to take
       // the "main" map type clause from the directive being used.
-      uint64_t mapType =
-          memberMaps[std::get<1>(indices.second[0])].getMapType().value_or(0);
+      uint64_t mapType = indices.second[0].memberMap.getMapType().value_or(0);
 
       // create parent to emplace and bind members
       auto origSymbol = converter.getSymbolAddress(*indices.first);
 
       llvm::SmallVector<mlir::Value> members;
-      for (auto pair : indices.second)
-        members.push_back((mlir::Value)memberMaps[std::get<1>(pair)]);
+      for (auto memberIndicesData : indices.second)
+        members.push_back((mlir::Value)memberIndicesData.memberMap);
 
       mlir::Value mapOp = createMapInfoOp(
           converter.getFirOpBuilder(), origSymbol.getLoc(), origSymbol,

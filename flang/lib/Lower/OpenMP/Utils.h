@@ -49,6 +49,22 @@ using DeclareTargetCapturePair =
     std::pair<mlir::omp::DeclareTargetCaptureClause,
               const Fortran::semantics::Symbol &>;
 
+// A small helper structure for keeping track of a
+// component members MapInfoOp and index data when
+// lowering OpenMP map clauses. Keeps track of the
+// placement of the component in the derived type
+// hierarchy it rests within, alongside the
+// generated mlir::omp::MapInfoOp for the mapped
+// component.
+struct OmpMapMemberIndicesData {
+  // The indices representing the component members
+  // placement in it's derived type parents hierarchy
+  llvm::SmallVector<int> memberPlacementIndices;
+
+  // placement of the member in the member vector.
+  mlir::omp::MapInfoOp memberMap;
+};
+
 llvm::SmallVector<int>
 generateMemberPlacementIndices(const Fortran::parser::OmpObject &ompObject);
 
@@ -61,16 +77,10 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool partialMap = false);
 
-int findComponentMemberPlacement(
-    const Fortran::semantics::Symbol *dTypeSym,
-    const Fortran::semantics::Symbol *componentSym);
-
 void insertChildMapInfoIntoParent(
     Fortran::lower::AbstractConverter &converter,
     std::map<const Fortran::semantics::Symbol *,
-             llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
-        &parentMemberIndices,
-    llvm::SmallVector<mlir::omp::MapInfoOp> &memberMaps,
+             llvm::SmallVector<OmpMapMemberIndicesData>> &parentMemberIndices,
     llvm::SmallVectorImpl<mlir::Value> &mapOperands,
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,

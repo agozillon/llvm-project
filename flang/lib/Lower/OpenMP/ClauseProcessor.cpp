@@ -818,12 +818,8 @@ bool ClauseProcessor::processMap(
     llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
     llvm::SmallVectorImpl<mlir::Location> *mapSymLocs) const {
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
-
-  llvm::SmallVector<mlir::omp::MapInfoOp> memberMaps;
-  // TODO: Make this into a structure rather than this terrible amalgamation if
-  // the implementation works
   std::map<const Fortran::semantics::Symbol *,
-           llvm::SmallVector<std::pair<llvm::SmallVector<int>, int>>>
+           llvm::SmallVector<OmpMapMemberIndicesData>>
       parentMemberIndices;
 
   bool clauseFound = findRepeatableClause2<ClauseTy::Map>(
@@ -875,18 +871,6 @@ bool ClauseProcessor::processMap(
              std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
-          const Fortran::semantics::Symbol *parentSym = nullptr;
-
-          if (getOmpObjectSymbol(ompObject)->owner().IsDerivedType()) {
-            const auto *designator =
-                Fortran::parser::Unwrap<Fortran::parser::Designator>(
-                    ompObject.u);
-            assert(designator && "Expected a designator from derived type "
-                                 "component during map clause processing");
-            parentSym = GetFirstName(*designator).symbol;
-            parentMemberIndices[parentSym].push_back(std::make_pair(
-                generateMemberPlacementIndices(ompObject), memberMaps.size()));
-          }
 
           Fortran::lower::AddrAndBoundsInfo info =
               Fortran::lower::gatherDataOperandAddrAndBounds<
@@ -912,8 +896,18 @@ bool ClauseProcessor::processMap(
                   mapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
-          if (parentSym) {
-            memberMaps.push_back(mapOp);
+          if (getOmpObjectSymbol(ompObject)->owner().IsDerivedType()) {
+            const auto *designator =
+                Fortran::parser::Unwrap<Fortran::parser::Designator>(
+                    ompObject.u);
+            assert(designator && "Expected a designator from derived type "
+                                 "component during map clause processing");
+            const Fortran::semantics::Symbol *parentSym =
+                GetFirstName(*designator).symbol;
+            assert(parentSym && "Could not find parent symbol during lower of "
+                                "a component member in OpenMP map clause");
+            parentMemberIndices[parentSym].push_back(
+                {generateMemberPlacementIndices(ompObject), mapOp});
           } else {
             mapOperands.push_back(mapOp);
             mapSymbols->push_back(getOmpObjectSymbol(ompObject));
@@ -925,9 +919,8 @@ bool ClauseProcessor::processMap(
         }
       });
 
-  insertChildMapInfoIntoParent(converter, parentMemberIndices, memberMaps,
-                               mapOperands, mapSymTypes, mapSymLocs,
-                               mapSymbols);
+  insertChildMapInfoIntoParent(converter, parentMemberIndices, mapOperands,
+                               mapSymTypes, mapSymLocs, mapSymbols);
 
   return clauseFound;
 }
