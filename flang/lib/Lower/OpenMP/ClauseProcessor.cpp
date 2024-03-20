@@ -16,6 +16,7 @@
 #include "flang/Lower/PFTBuilder.h"
 #include "flang/Parser/tools.h"
 #include "flang/Semantics/tools.h"
+#include "flang/Semantics/expression.h"
 
 namespace Fortran {
 namespace lower {
@@ -810,6 +811,45 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
   return op;
 }
 
+// Fortran::semantics::Symbol *
+// getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject,
+//                    Fortran::lower::StatementContext &stmtCtx,
+//                    semantics::SemanticsContext &semaCtx,
+//                    Fortran::lower::AbstractConverter &converter,
+//                    mlir::Location clauseLocation) {
+//   Fortran::semantics::Symbol *sym = nullptr;
+//   std::visit(
+//       Fortran::common::visitors{
+//           [&](const Fortran::parser::Designator &designator) {
+//             if (auto *arrayEle =
+//                     Fortran::parser::Unwrap<Fortran::parser::ArrayElement>(
+//                         designator)) {
+//               sym = GetLastName(arrayEle->base).symbol;
+
+//             } else if (auto *structComp = Fortran::parser::Unwrap<
+//                            Fortran::parser::StructureComponent>(designator)) {
+//               sym = structComp->component.symbol;
+
+//               // const auto *designator =
+//               //     Fortran::parser::Unwrap<Fortran::parser::Designator>(
+//               //         ompObject.u);
+//               auto expr = Fortran::semantics::AnalyzeExpr(semaCtx, designator);
+//               auto test = converter.genExprAddr(clauseLocation, *expr, stmtCtx);
+//               fir::getBase(test);
+//               test.getUnboxed()->dump();
+
+//             } else if (const Fortran::parser::Name *name =
+//                            Fortran::semantics::getDesignatorNameIfDataRef(
+//                                designator)) {
+
+//               sym = name->symbol;
+//             }
+//           },
+//           [&](const Fortran::parser::Name &name) { sym = name.symbol; }},
+//       ompObject.u);
+//   return sym;
+// }
+
 bool ClauseProcessor::processMap(
     mlir::Location currentLocation, const llvm::omp::Directive &directive,
     Fortran::lower::StatementContext &stmtCtx,
@@ -870,11 +910,13 @@ bool ClauseProcessor::processMap(
                          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
         }
 
+
         for (const Fortran::parser::OmpObject &ompObject :
              std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {          
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
           const Fortran::semantics::Symbol *parentSym = nullptr;
+          mlir::Value compRef;
 
           if (getOmpObjectSymbol(ompObject)->owner().IsDerivedType()) {
             const auto *designator =
@@ -885,21 +927,105 @@ bool ClauseProcessor::processMap(
             parentSym = GetFirstName(*designator).symbol;
             parentMemberIndices[parentSym].push_back(std::make_pair(
                 generateMemberPlacementIndices(ompObject), memberMaps.size()));
+
+            if (Fortran::semantics::IsAllocatableOrObjectPointer(
+                    getOmpObjectSymbol(ompObject))) {
+              auto parentAddr = converter.getSymbolAddress(*parentSym);
+              auto recordType = fir::unwrapRefType(parentAddr.getType())
+                                    .cast<fir::RecordType>();
+              const auto *comp = getStructComp(*designator);
+              auto fieldName =
+                  converter.getRecordTypeFieldName(*comp->component.symbol);
+              mlir::Type fieldType = recordType.getType(fieldName);
+              unsigned fieldIdx = recordType.getFieldIndex(fieldName);
+              mlir::Type designatorType = fir::ReferenceType::get(fieldType);
+              // TODO: This will have to be changed to a coordinate_of probably
+              // as I had to comment out a TODO error emission for it to work...
+              compRef = firOpBuilder.create<hlfir::DesignateOp>(
+                  clauseLocation, designatorType, parentAddr, fieldName,
+                  /*compShape=*/mlir::Value{}, hlfir::DesignateOp::Subscripts{},
+                  /*substring=*/mlir::ValueRange{},
+                  /*complexPart=*/std::nullopt,
+                  /*shape=*/mlir::Value{}, /*typeParams=*/mlir::ValueRange{});
+            }
           }
 
-          Fortran::lower::AddrAndBoundsInfo info =
-              Fortran::lower::gatherDataOperandAddrAndBounds<
-                  Fortran::parser::OmpObject, mlir::omp::DataBoundsOp,
-                  mlir::omp::DataBoundsType>(
-                  converter, firOpBuilder, semaCtx, stmtCtx, ompObject,
-                  clauseLocation, asFortran, bounds, treatIndexAsSection);
 
-          auto origSymbol =
-              converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
-          mlir::Value symAddr = info.addr;
-          if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
+
+          // auto designator =
+          //       Fortran::parser::Unwrap<Fortran::parser::Designator>(
+          //           ompObject.u);
+          // llvm::errs() << "designator \n";
+          // const Fortran::parser::Designator &designator = *design;
+          // auto expr = Fortran::semantics::AnalyzeExpr(semaCtx,
+          //                                               *designator); 
+                    
+      // const Fortran::semantics::Symbol &componentSym = component.GetLastSymbol();
+      // converter.getRecordTypeFieldName(componentSym);
+      // auto recordType =
+      //   hlfir::getFortranElementType(baseType).cast<fir::RecordType>();
+      //       mlir::Type fieldType = recordType.getType(partInfo.componentName);
+
+        //  converter.getSymbolExtendedValue()
+        //  converter.getSymbolAddress()
+          //   auto test =
+          //             converter.genExprAddr(clauseLocation, *expr, stmtCtx);
+          // // test.dump();
+
+            // auto test =
+            //           converter.genExprBox(clauseLocation, *expr, stmtCtx);
+
+          // auto base = fir::getBase(test);
+          // base.dump();
+
+          // auto defOp = base.getDefiningOp<hlfir::DesignateOp>();
+          // if (defOp) {
+          //   llvm::errs() << "found defining op \n";
+          //   defOp.dump();
+          // }
+
+        //  llvm::errs() << "comp \n";
+
+        //  auto comp = getStructComp(*designator);
+        //  expr = Fortran::semantics::AnalyzeExpr(semaCtx, *comp);
+        //  test = converter.genExprAddr(clauseLocation, *expr, stmtCtx);
+        //  base = fir::getBase(test);
+        //  base.dump();
+        // llvm::errs() << "obj sym: \n";
+        // getOmpObjectSymbol(ompObject)->dump();
+        // llvm::errs() << "comp sym \n";
+        // auto comp = getStructComp(*designator);
+        // comp->component.symbol->dump();
+
+      // auto testAdd =
+      //        converter.getSymbolAddress(*comp->component.symbol);
+
+      // if (!testAdd)
+      //   llvm::errs() << "no symbol for component \n";
+
+         // can also pass dataref here it seems, perhaps we can use some element
+         // of the component
+
+         Fortran::lower::AddrAndBoundsInfo info =
+             Fortran::lower::gatherDataOperandAddrAndBounds<
+                 Fortran::parser::OmpObject, mlir::omp::DataBoundsOp,
+                 mlir::omp::DataBoundsType>(
+                 converter, firOpBuilder, semaCtx, stmtCtx, ompObject,
+                 clauseLocation, asFortran, bounds, treatIndexAsSection);
+
+         auto origSymbol =
+             converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
+         mlir::Value symAddr = info.addr;
+
+         // very plausibaly need some different method of getting the symbol,
+         // perhaps gatherDataOperandAddrAndBounds may have some insight..
+         if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType())) {
             symAddr = origSymbol;
-
+          } 
+          
+          if (compRef)
+            symAddr = compRef;
+    
           // Explicit map captures are captured ByRef by default,
           // optimisation passes may alter this to ByCopy or other capture
           // types to optimise

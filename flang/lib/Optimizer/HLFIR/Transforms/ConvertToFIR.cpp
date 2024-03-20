@@ -492,8 +492,8 @@ public:
             rewriter.replaceOp(designate, base);
             return mlir::success();
           }
-          TODO(loc,
-               "addressing parametrized derived type automatic components");
+          // TODO(loc,
+          //      "addressing parametrized derived type automatic components");
         }
         baseEleTy = hlfir::getFortranElementType(componentType);
         shape = designate.getComponentShape();

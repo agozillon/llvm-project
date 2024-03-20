@@ -2013,6 +2013,13 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
             mapInfo.getMembers()[0].getDefiningOp()))
       return mapOp;
 
+  auto getMemberIndex = [&](int memberIdx, int elementIdx) {
+    return mapInfo.getMembersIndexAttr().getValues<int32_t>()
+        [memberIdx *
+             mapInfo.getMembersIndexAttr().getShapedType().getShape()[1] +
+         elementIdx];
+  };
+
   std::vector<size_t> indices(
       mapInfo.getMembersIndexAttr().getShapedType().getShape()[0]);
   std::iota(indices.begin(), indices.end(), 0);
@@ -2022,16 +2029,8 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
         for (int i = 0;
              i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1];
              ++i) {
-            int aIndex = mapInfo.getMembersIndexAttr()
-                  .getValues<int32_t>()[a * mapInfo.getMembersIndexAttr()
-                                                .getShapedType()
-                                                .getShape()[1] +
-                                        i];
-            int bIndex = mapInfo.getMembersIndexAttr()
-                  .getValues<int32_t>()[b * mapInfo.getMembersIndexAttr()
-                                                .getShapedType()
-                                                .getShape()[1] +
-                                        i];
+          int aIndex = getMemberIndex(a, i);
+          int bIndex = getMemberIndex(b, i);
 
           // As we have iterated to a stage where both indices are invalid
           // we likely have the same member index, possibly the same member 
@@ -2059,9 +2058,30 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
         return true;
       });
 
+  int memberIdx = indices.front();
+
+  // TODO/FIXME: Try the other variation of this that alters the function above,
+  // and may be a little cleaner. This function is in the notes. 
+  // TODO/FIXME: Test if this ruins mapping of members inside of dtypes...
+  bool isParent = false;
+  for (int i = 0;
+       i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1]; ++i) {
+    int aIndex = getMemberIndex(indices.front(), i);
+    int bIndex = getMemberIndex(indices.back(), i);
+
+    if (aIndex == -1 && bIndex != -1) 
+      isParent = true; 
+
+    // members no longer match, we don't need to progress further.
+    if (aIndex != bIndex)
+      break;
+  }
+
+  if (!isParent && !first)
+    memberIdx = indices.back();
+
   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapInfo.getMembers()[((first) ? indices.front() : indices.back())]
-              .getDefiningOp()))
+          mapInfo.getMembers()[memberIdx].getDefiningOp()))
     return mapOp;
 
   assert(false && "getFirstOrLastMappedMemberPtr could not find approproaite "
@@ -2239,15 +2259,28 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
     int firstMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, true));
-    lowAddr = builder.CreatePointerCast(mapData.Pointers[firstMemberIdx],
-                                        builder.getPtrTy());
     int lastMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, false));
+
+    // NOTE/TODO: Should likely use OriginalValue here instead of Pointers to avoid offset
+    // or any manipulations interfering with the calculation.
+    lowAddr = builder.CreatePointerCast(mapData.Pointers[firstMemberIdx],
+                                        builder.getPtrTy());
     highAddr = builder.CreatePointerCast(
         builder.CreateGEP(mapData.BaseType[lastMemberIdx],
                           mapData.Pointers[lastMemberIdx], builder.getInt64(1)),
         builder.getPtrTy());
     combinedInfo.Pointers.emplace_back(mapData.Pointers[firstMemberIdx]);
+// perhaps keep it the same as before (although, maybe we should be using orignalvalue rather than pointer value, but can leave 
+// that till later) as well as the first/last function, but we have another function that detects if something is part of an object
+// for the sake of the alloc and will do a different size calc using the top level one, at least until we can verify we can get it 
+// working the possibly less optimal way .
+
+// checking if one is overarching another should be easy, just iterate over both and the first to have a -1 is the top member, 
+// if neither do, then neither is and we process first/last as normal 
+
+    // llvm::errs() << "first: " << firstMemberIdx << "\n";
+    // llvm::errs() << "last: " << lastMemberIdx << "\n";
   }
 
   llvm::Value *size = builder.CreateIntCast(
@@ -2304,6 +2337,27 @@ static void processMapMembersWithParent(
 
     assert(memberDataIdx >= 0 && "could not find mapped member of structure");
 
+    // we must make a map of the pointer AND the data, will this break the 
+    // basic descriptor case...?
+    if (checkIfPointerMap(memberClause)) {
+      auto mapFlag = llvm::omp::OpenMPOffloadMappingFlags(
+          memberClause.getMapType().value());
+      mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+      mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF;
+      ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
+      combinedInfo.Types.emplace_back(mapFlag);
+      combinedInfo.DevicePointers.emplace_back(
+          llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+      combinedInfo.Names.emplace_back(
+          LLVM::createMappingInformation(memberClause.getLoc(), ompBuilder));
+      combinedInfo.BasePointers.emplace_back(
+          mapData.BasePointers[mapDataIndex]);
+      combinedInfo.Pointers.emplace_back(mapData.BasePointers[memberDataIdx]);
+      // size of pointer, but this could perhaps vary per architecture and should
+      // be gathered from somewhere.
+      combinedInfo.Sizes.emplace_back(builder.getInt64(8));
+    }
+
     // Same MemberOfFlag to indicate its link with parent and other members
     // of
     auto mapFlag =
@@ -2319,7 +2373,7 @@ static void processMapMembersWithParent(
         llvm::OpenMPIRBuilder::DeviceInfoTy::None);
     combinedInfo.Names.emplace_back(
         LLVM::createMappingInformation(memberClause.getLoc(), ompBuilder));
-    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
     combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
     combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
