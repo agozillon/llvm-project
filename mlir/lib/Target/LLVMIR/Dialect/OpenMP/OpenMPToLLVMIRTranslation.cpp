@@ -2013,43 +2013,51 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
             mapInfo.getMembers()[0].getDefiningOp()))
       return mapOp;
 
-  auto getMemberIndex = [&](int memberIdx, int elementIdx) {
-    return mapInfo.getMembersIndexAttr().getValues<int32_t>()
-        [memberIdx *
-             mapInfo.getMembersIndexAttr().getShapedType().getShape()[1] +
-         elementIdx];
-  };
-
   std::vector<size_t> indices(
       mapInfo.getMembersIndexAttr().getShapedType().getShape()[0]);
   std::iota(indices.begin(), indices.end(), 0);
+
 
   llvm::sort(
       indices.begin(), indices.end(), [&](const size_t a, const size_t b) {
         for (int i = 0;
              i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1];
              ++i) {
-          int aIndex = getMemberIndex(a, i);
-          int bIndex = getMemberIndex(b, i);
+            int aIndex = mapInfo.getMembersIndexAttr()
+                  .getValues<int32_t>()[a * mapInfo.getMembersIndexAttr()
+                                                .getShapedType()
+                                                .getShape()[1] +
+                                        i];
+            int bIndex = mapInfo.getMembersIndexAttr()
+                  .getValues<int32_t>()[b * mapInfo.getMembersIndexAttr()
+                                                .getShapedType()
+                                                .getShape()[1] +
+                                        i];
 
           // As we have iterated to a stage where both indices are invalid
           // we likely have the same member index, possibly the same member 
           // being mapped, return the first. 
           if (aIndex == -1 && bIndex == -1)
+            return first;
+
+         if (aIndex != -1 && bIndex == -1)
+            return false;
+
+         if (aIndex == -1 && bIndex != -1)
             return true;
 
           if (aIndex == -1)
-            return true;
+            return first;
 
           if (bIndex == -1)
-            return false;
+            return !first;
 
           // A is earlier in the record type layout than B
           if (aIndex < bIndex)
-            return true;
+            return first;
    
           if (bIndex < aIndex)
-            return false;
+            return !first;
         }
 
         // iterated the entire list and couldn't make a decision, all elements
@@ -2058,30 +2066,9 @@ getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
         return true;
       });
 
-  int memberIdx = indices.front();
-
-  // TODO/FIXME: Try the other variation of this that alters the function above,
-  // and may be a little cleaner. This function is in the notes. 
-  // TODO/FIXME: Test if this ruins mapping of members inside of dtypes...
-  bool isParent = false;
-  for (int i = 0;
-       i < mapInfo.getMembersIndexAttr().getShapedType().getShape()[1]; ++i) {
-    int aIndex = getMemberIndex(indices.front(), i);
-    int bIndex = getMemberIndex(indices.back(), i);
-
-    if (aIndex == -1 && bIndex != -1) 
-      isParent = true; 
-
-    // members no longer match, we don't need to progress further.
-    if (aIndex != bIndex)
-      break;
-  }
-
-  if (!isParent && !first)
-    memberIdx = indices.back();
-
   if (auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
-          mapInfo.getMembers()[memberIdx].getDefiningOp()))
+          mapInfo.getMembers()[indices.front()]
+              .getDefiningOp()))
     return mapOp;
 
   assert(false && "getFirstOrLastMappedMemberPtr could not find approproaite "
@@ -2259,8 +2246,10 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
     int firstMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, true));
+    // llvm::errs() << "first: " << firstMemberIdx << "\n";
     int lastMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, false));
+    // llvm::errs() << "last: " << lastMemberIdx << "\n";
 
     // NOTE/TODO: Should likely use OriginalValue here instead of Pointers to avoid offset
     // or any manipulations interfering with the calculation.
@@ -2279,8 +2268,7 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
 // checking if one is overarching another should be easy, just iterate over both and the first to have a -1 is the top member, 
 // if neither do, then neither is and we process first/last as normal 
 
-    // llvm::errs() << "first: " << firstMemberIdx << "\n";
-    // llvm::errs() << "last: " << lastMemberIdx << "\n";
+
   }
 
   llvm::Value *size = builder.CreateIntCast(
@@ -2373,7 +2361,12 @@ static void processMapMembersWithParent(
         llvm::OpenMPIRBuilder::DeviceInfoTy::None);
     combinedInfo.Names.emplace_back(
         LLVM::createMappingInformation(memberClause.getLoc(), ompBuilder));
-    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
+      
+    if (checkIfPointerMap(memberClause))
+      combinedInfo.BasePointers.emplace_back(mapData.BasePointers[memberDataIdx]);
+    else
+      combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+
     combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
     combinedInfo.Sizes.emplace_back(mapData.Sizes[memberDataIdx]);
   }
