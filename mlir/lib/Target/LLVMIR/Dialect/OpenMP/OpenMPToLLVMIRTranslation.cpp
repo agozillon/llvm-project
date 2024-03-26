@@ -3709,6 +3709,12 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::amendOperation(
 }
 
 static bool isInternalTargetDeviceOp(Operation *op) {
+  // TargetDataOp's contain regions of both host 
+  // and device code, so we must lower these as if
+  // they are declare target functions.
+  if (isa<omp::TargetDataOp>(op))
+    return true;
+  
   // Assumes no reverse offloading
   if (op->getParentOfType<omp::TargetOp>())
     return true;
