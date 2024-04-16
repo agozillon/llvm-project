@@ -2413,8 +2413,6 @@ static void processMapMembersWithParent(
 
     assert(memberDataIdx >= 0 && "could not find mapped member of structure");
 
-    // we must make a map of the pointer AND the data, will this break the 
-    // basic descriptor case...?
     if (checkIfPointerMap(memberClause)) {
       auto mapFlag = llvm::omp::OpenMPOffloadMappingFlags(
           memberClause.getMapType().value());
