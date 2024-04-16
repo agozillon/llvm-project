@@ -2417,11 +2417,8 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
         mlir::dyn_cast<mlir::omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
     int firstMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, true));
-    // llvm::errs() << "first: " << firstMemberIdx << "\n";
     int lastMemberIdx = getMapDataMemberIdx(
         mapData, getFirstOrLastMappedMemberPtr(mapOp, false));
-    // llvm::errs() << "last: " << lastMemberIdx << "\n";
-
     // NOTE/TODO: Should likely use OriginalValue here instead of Pointers to
     // avoid offset or any manipulations interfering with the calculation.
     lowAddr = builder.CreatePointerCast(mapData.Pointers[firstMemberIdx],
@@ -2431,16 +2428,6 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
                           mapData.Pointers[lastMemberIdx], builder.getInt64(1)),
         builder.getPtrTy());
     combinedInfo.Pointers.emplace_back(mapData.Pointers[firstMemberIdx]);
-    // perhaps keep it the same as before (although, maybe we should be using
-    // orignalvalue rather than pointer value, but can leave that till later) as
-    // well as the first/last function, but we have another function that
-    // detects if something is part of an object for the sake of the alloc and
-    // will do a different size calc using the top level one, at least until we
-    // can verify we can get it working the possibly less optimal way .
-
-    // checking if one is overarching another should be easy, just iterate over
-    // both and the first to have a -1 is the top member, if neither do, then
-    // neither is and we process first/last as normal
   }
 
   llvm::Value *size = builder.CreateIntCast(
@@ -2752,8 +2739,6 @@ static void genMapInfos(llvm::IRBuilderBase &builder,
   // utilise the size from any component of MapInfoData, if we can't
   // something is missing from the initial MapInfoData construction.
   for (size_t i = 0; i < mapData.MapClause.size(); ++i) {
-    // NOTE/TODO: We currently do not support arbitrary depth record
-    // type mapping.
     if (mapData.IsAMember[i])
       continue;
 

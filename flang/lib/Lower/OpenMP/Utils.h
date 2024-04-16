@@ -94,12 +94,6 @@ void gatherFuncAndVarSyms(
     const ObjectList &objects, mlir::omp::DeclareTargetCaptureClause clause,
     llvm::SmallVectorImpl<DeclareTargetCapturePair> &symbolAndClause);
 
-const parser::StructureComponent *getStructComp(const parser::DataRef &x);
-
-const parser::StructureComponent *getStructComp(const parser::Substring &x);
-
-const parser::StructureComponent *getStructComp(const parser::Designator &x);
-
 Fortran::semantics::Symbol *
 getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject);
 
