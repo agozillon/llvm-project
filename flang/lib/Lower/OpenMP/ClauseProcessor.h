@@ -115,7 +115,7 @@ public:
   bool processMap(
       mlir::Location currentLocation, Fortran::lower::StatementContext &stmtCtx,
       mlir::omp::MapClauseOps &result,
-      llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSymbols,
+      llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSyms,
       llvm::SmallVectorImpl<mlir::Type> *mapSymTypes = nullptr,
       llvm::SmallVectorImpl<mlir::Location> *mapSymLocs = nullptr) const;
   bool processReduction(
@@ -248,7 +248,7 @@ bool ClauseProcessor::processMotionClauses(
         }
       });
 
-  insertChildMapInfoIntoParent(converter, parentMemberIndices, mapOperands,
+  insertChildMapInfoIntoParent(converter, parentMemberIndices, result.mapVars,
                                nullptr, nullptr, &mapSymbols);
   return clauseFound;
 }

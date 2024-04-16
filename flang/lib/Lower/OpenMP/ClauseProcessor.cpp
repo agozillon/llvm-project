@@ -837,8 +837,8 @@ bool ClauseProcessor::processMap(
     mlir::Location currentLocation, Fortran::lower::StatementContext &stmtCtx,
     mlir::omp::MapClauseOps &result,
     llvm::SmallVectorImpl<const Fortran::semantics::Symbol *> *mapSyms,
-    llvm::SmallVectorImpl<mlir::Location> *mapSymLocs,
-    llvm::SmallVectorImpl<mlir::Type> *mapSymTypes) const {
+    llvm::SmallVectorImpl<mlir::Type> *mapSymTypes,
+    llvm::SmallVectorImpl<mlir::Location> *mapSymLocs) const {
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
   std::map<const Fortran::semantics::Symbol *,
            llvm::SmallVector<OmpMapMemberIndicesData>>

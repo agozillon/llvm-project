@@ -1120,7 +1120,7 @@ static void genTargetClauses(
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
   cp.processIsDevicePtr(clauseOps, devicePtrTypes, devicePtrLocs,
                         devicePtrSyms);
-  cp.processMap(loc, stmtCtx, clauseOps, &mapSyms, &mapLocs, &mapTypes);
+  cp.processMap(loc, stmtCtx, clauseOps, &mapSyms, &mapTypes, &mapLocs);
   cp.processThreadLimit(stmtCtx, clauseOps);
   // TODO Support delayed privatization.
 
@@ -1144,7 +1144,8 @@ static void genTargetDataClauses(
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processDevice(stmtCtx, clauseOps);
   cp.processIf(llvm::omp::Directive::OMPD_target_data, clauseOps);
-  cp.processMap(loc, stmtCtx, clauseOps);
+  llvm::SmallVector<const Fortran::semantics::Symbol *> mapSyms;
+  cp.processMap(loc, stmtCtx, clauseOps, &mapSyms);
   cp.processUseDeviceAddr(clauseOps, useDeviceTypes, useDeviceLocs,
                           useDeviceSyms);
   cp.processUseDevicePtr(clauseOps, useDeviceTypes, useDeviceLocs,
@@ -1181,7 +1182,8 @@ static void genTargetEnterExitUpdateDataClauses(
     cp.processMotionClauses<clause::To>(stmtCtx, clauseOps);
     cp.processMotionClauses<clause::From>(stmtCtx, clauseOps);
   } else {
-    cp.processMap(loc, stmtCtx, clauseOps);
+    llvm::SmallVector<const Fortran::semantics::Symbol *> mapSyms;
+    cp.processMap(loc, stmtCtx, clauseOps, &mapSyms);
   }
 }
 
