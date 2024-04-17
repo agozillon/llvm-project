@@ -207,6 +207,7 @@ bool ClauseProcessor::processMotionClauses(
         for (const omp::Object &object : objects) {
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
+          const Fortran::semantics::Symbol *parentSym = nullptr;
 
           Fortran::lower::AddrAndBoundsInfo info =
               Fortran::lower::gatherDataOperandAddrAndBounds<
@@ -220,6 +221,35 @@ bool ClauseProcessor::processMotionClauses(
           if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
             symAddr = origSymbol;
 
+          llvm::SmallVector<int> indices;
+          if (object.id()->owner().IsDerivedType()) {
+            if (auto dataRef{ExtractDataRef(object.designator)}) {
+              parentSym = &dataRef->GetFirstSymbol();
+              assert(parentSym &&
+                     "Could not find parent symbol during lower of "
+                     "a component member in OpenMP map clause");
+
+              indices = generateMemberPlacementIndices(object, semaCtx);
+              if (Fortran::semantics::IsAllocatableOrObjectPointer(
+                      object.id())) {
+                llvm::SmallVector<mlir::Value> index;
+                for (auto idx : indices)
+                  index.push_back(firOpBuilder.createIntegerConstant(
+                      clauseLocation, firOpBuilder.getIndexType(), idx));
+
+                auto recordType =
+                    converter.genType(*object.id()->owner().derivedTypeSpec())
+                        .cast<fir::RecordType>();
+                auto fieldName = converter.getRecordTypeFieldName(*object.id());
+                mlir::Type fieldType = recordType.getType(fieldName);
+                mlir::Type designatorType = fir::ReferenceType::get(fieldType);
+                symAddr = firOpBuilder.create<fir::CoordinateOp>(
+                    clauseLocation, designatorType,
+                    converter.getSymbolAddress(*parentSym), index);
+              }
+            }
+          }
+
           // Explicit map captures are captured ByRef by default,
           // optimisation passes may alter this to ByCopy or other capture
           // types to optimise
@@ -231,16 +261,8 @@ bool ClauseProcessor::processMotionClauses(
                   mapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
-          if (object.id()->owner().IsDerivedType()) {
-            if (auto dataRef{ExtractDataRef(object.designator)}) {
-              const Fortran::semantics::Symbol *parentSym =
-                  &dataRef->GetFirstSymbol();
-              assert(parentSym &&
-                     "Could not find parent symbol during lower of "
-                     "a component member in OpenMP map clause");
-              parentMemberIndices[parentSym].push_back(
-                  {generateMemberPlacementIndices(object, semaCtx), mapOp});
-            }
+          if (parentSym) {
+            parentMemberIndices[parentSym].push_back({indices, mapOp});
           } else {
             result.mapVars.push_back(mapOp);
             mapSymbols.push_back(object.id());
