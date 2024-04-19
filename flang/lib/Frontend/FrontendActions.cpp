@@ -334,6 +334,9 @@ bool CodeGenAction::beginSourceFileAction() {
 
   pm.enableVerifier(/*verifyPasses=*/true);
   pm.addPass(std::make_unique<Fortran::lower::VerifierPass>());
+  
+//  llvm::errs() << "dump module \n\n";
+ // mlirModule->dump();
 
   if (mlir::failed(pm.run(*mlirModule))) {
     unsigned diagID = ci.getDiagnostics().getCustomDiagID(

@@ -1815,11 +1815,18 @@ mlir::translateModuleToLLVMIR(Operation *module, llvm::LLVMContext &llvmContext,
     }
   }
 
+//  llvm::errs() << "\n\n\n dumping entirety of MLIR module \n";
+//  module->dump();
+
+
   // Operations in function bodies with symbolic references must be converted
   // after the top-level operations they refer to are declared, so we do it
   // last.
   if (failed(translator.convertFunctions()))
     return nullptr;
+
+//  llvm::errs() << "\n\n\n dumping entirety of LLVM module \n";
+//  translator.llvmModule->dump();
 
   if (llvm::verifyModule(*translator.llvmModule, &llvm::errs()))
     return nullptr;

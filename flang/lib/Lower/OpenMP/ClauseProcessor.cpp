@@ -929,9 +929,11 @@ bool ClauseProcessor::processMap(
                 auto fieldName = converter.getRecordTypeFieldName(*object.id());
                 mlir::Type fieldType = recordType.getType(fieldName);
                 mlir::Type designatorType = fir::ReferenceType::get(fieldType);
+                Fortran::lower::AddrAndBoundsInfo parentBaseAddr = Fortran::lower::getDataOperandBaseAddr(converter, firOpBuilder, *parentSym, clauseLocation);
+                
                 symAddr = firOpBuilder.create<fir::CoordinateOp>(
                     clauseLocation, designatorType,
-                    converter.getSymbolAddress(*parentSym), index);
+                   parentBaseAddr.addr, index);
               }
             }
           }
@@ -962,7 +964,6 @@ bool ClauseProcessor::processMap(
 
   insertChildMapInfoIntoParent(converter, parentMemberIndices, result.mapVars,
                                mapSymTypes, mapSymLocs, mapSyms);
-
   return clauseFound;
 }
 

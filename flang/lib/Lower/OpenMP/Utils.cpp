@@ -199,9 +199,12 @@ void insertChildMapInfoIntoParent(
   for (auto indices : parentMemberIndices) {
     bool parentExists = false;
     size_t parentIdx;
+
     for (parentIdx = 0; parentIdx < mapSymbols->size(); ++parentIdx)
-      if ((*mapSymbols)[parentIdx] == indices.first)
+      if ((*mapSymbols)[parentIdx] == indices.first) {
         parentExists = true;
+        break;
+      }
 
     if (parentExists) {
       auto mapOp = mlir::dyn_cast<mlir::omp::MapInfoOp>(
@@ -209,6 +212,15 @@ void insertChildMapInfoIntoParent(
       assert(mapOp && "Parent provided to insertChildMapInfoIntoParent was not "
                       "an expected MapInfoOp");
 
+      // NOTE: To maintain appropriate SSA ordering, we move the parent map
+      // which will now have references to it's children after the last 
+      // of it's members to be generated. This is neccesary when a user
+      // has defined a series of parent and children maps where the parent
+      // precedes the children. An alternative, may be to do
+      // delayed generation of map info operations from the clauses and 
+      // organize them first before generation. 
+      mapOp->moveAfter(indices.second.back().memberMap);
+      
       for (auto memberIndicesData : indices.second)
         mapOp.getMembersMutable().append(
             (mlir::Value)memberIndicesData.memberMap);
