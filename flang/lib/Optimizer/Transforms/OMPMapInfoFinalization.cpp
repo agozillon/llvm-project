@@ -403,6 +403,7 @@ class OMPMapInfoFinalizationPass
     module->walk([&](mlir::omp::MapInfoOp op) {
       addImplicitMembersToTarget(op, builder, *op->getUsers().begin());
     });
+
   }
 };
 
