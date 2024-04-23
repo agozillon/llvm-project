@@ -924,13 +924,13 @@ bool ClauseProcessor::processMap(
                     Fortran::lower::getDataOperandBaseAddr(
                         converter, firOpBuilder, *parentSym, clauseLocation);
 
-                mlir::Type curType = parentBaseAddr.addr.getType();
+                mlir::Type curType = fir::unwrapRefType(parentBaseAddr.addr.getType());
                 mlir::Value curValue = parentBaseAddr.addr;
 
                 for (size_t i = 0; i < indices.size(); ++i) {
                   fir::RecordType recordType =
                       curType.dyn_cast_or_null<fir::RecordType>();
-                  if (fir::isBoxedRecordType(fir::unwrapRefType(curType)))
+                  if (fir::isBoxedRecordType(curType))
                     recordType = fir::dyn_cast_ptrOrBoxEleTy(curType)
                                      .cast<fir::RecordType>();
                   assert(recordType && "unhandled type encountered");
@@ -938,6 +938,7 @@ bool ClauseProcessor::processMap(
                   auto idxConst = firOpBuilder.createIntegerConstant(
                       clauseLocation, firOpBuilder.getIndexType(), indices[i]);
                   curType = recordType.getTypeList().at(indices[i]).second;
+
                   curValue = firOpBuilder.create<fir::CoordinateOp>(
                       clauseLocation, firOpBuilder.getRefType(curType),
                       curValue, idxConst);
@@ -1000,16 +1001,16 @@ bool ClauseProcessor::processMap(
                         mlir::omp::VariableCaptureKind::ByRef,
                         curValue.getType());
 
-                    auto intermediateIndices = indices;
-                    std::fill(std::next(intermediateIndices.begin(), i),
+                    auto intermediateIndices = indices;;
+                    std::fill(std::next(intermediateIndices.begin(), i + 1),
                               intermediateIndices.end(), -1);
                     parentMemberIndices[parentSym].push_back(
                         {intermediateIndices, mapOp});
-                  }
 
-                  if (i != indices.size() - 1)
-                    curValue = firOpBuilder.create<fir::LoadOp>(clauseLocation,
-                                                                curValue);
+                    if (i != indices.size() - 1)
+                      curValue = firOpBuilder.create<fir::LoadOp>(
+                          clauseLocation, curValue);
+                  }
                 }
 
                 symAddr = curValue;
