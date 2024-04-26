@@ -40,6 +40,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
 #include <numeric>
 
@@ -168,6 +169,55 @@ class OMPMapInfoFinalizationPass
             mlir::omp::VariableCaptureKind::ByRef),
         builder.getStringAttr("") /*name*/,
         builder.getBoolAttr(false)/*partial_map*/);
+
+  }
+
+
+  void adjustMemberIndices(
+      llvm::SmallVector<llvm::SmallVector<int32_t>> &memberIndices,
+      size_t memberIndex) {
+    auto baseAddrIndex = memberIndices[memberIndex];
+    auto *iterPos = std::find(baseAddrIndex.begin(), baseAddrIndex.end(), -1);
+
+    if (iterPos != baseAddrIndex.end()) {
+      *iterPos = 0;
+    } else {
+      baseAddrIndex.push_back(0);
+      iterPos = baseAddrIndex.end();
+    }
+
+    auto insertPosition = std::distance(baseAddrIndex.begin(), iterPos);
+    for (size_t i = 0; i < memberIndices.size(); ++i) {
+      if (std::equal(baseAddrIndex.begin(), iterPos,
+                     memberIndices[i].begin())) {
+        if (i == memberIndex)
+          continue;
+
+        // we may just want to skip if the first condition gets triggered
+        if (memberIndices[i].size() < (size_t)insertPosition) {
+          memberIndices[i].push_back(0);
+        } else {
+          memberIndices[i].insert(
+              std::next(memberIndices[i].begin(), insertPosition),
+                0);
+        }
+      }
+    }
+
+   memberIndices.insert(std::next(memberIndices.begin(), memberIndex + 1),
+                         baseAddrIndex);
+
+   size_t largest = memberIndices[0].size();
+   for (auto v : memberIndices)
+      if (v.size() > largest)
+        largest = v.size();
+
+   for (auto &v : memberIndices)
+      if (v.size() < largest) {
+        auto *prevEnd = v.end();
+        v.resize(largest);
+        std::fill(prevEnd, v.end(), -1);
+      }
   }
 
   // TODO: Tidy this function up once case is working, there is a significant
@@ -187,25 +237,62 @@ class OMPMapInfoFinalizationPass
            "genDescriptorMemberMaps currently only supports descriptor used by "
            "one MapInfoOp member list");
 
+- fix the checks in both new tests to make sure they emit failure and aborts when they actually do fail
+- do a variation of a more nested double map like originally planned
+- do a variation with a larger set of varied nested maps from a single allocatable derived type
+- do a variation with a larger set of varied maps from two allocatables
+- do a variation with a map with a mixed set of maps (i.e. allocatables, and regular maps, from an allocatable dtype)
+
     mlir::Value newDescParentMapOp;
     if (!mapMemberUsers.empty()) {
+      // mapMemberUsers[0].parent.getMembersIndex()->dump();
       auto memberIndices = getMemberIndicesAsVectors(mapMemberUsers[0].parent);
       auto baseAddrIndex = memberIndices[mapMemberUsers[0].index];
-      auto *negIdx = std::find(baseAddrIndex.begin(), baseAddrIndex.end(), -1);
-      if (negIdx != baseAddrIndex.end()) {
+
+    // llvm::errs() << "Size of all: " << memberIndices.size() << "\n";
+    //  for (auto v : memberIndices)
+    //   llvm::errs() << "Size of Ele Vec: " << v.size() << "\n";
+
+      //  for (auto v : memberIndices) {
+      //   llvm::errs() << "new member \n";
+      //   for (auto val : v)
+      //     llvm::errs() << "val " << val << "\n";
+      //  }
+
+      adjustMemberIndices(memberIndices, mapMemberUsers[0].index);
+
+    // llvm::errs() << "Size of all: " << memberIndices.size() << "\n";
+    //  for (auto v : memberIndices)
+    //   llvm::errs() << "Size of Ele Vec: " << v.size() << "\n";
+
+    //    for (auto v : memberIndices) {
+    //     llvm::errs() << "new member \n";
+    //     for (auto val : v)
+    //       llvm::errs() << "val " << val << "\n";
+    //    }
+
+      // 1) Adjust the member indice of the current one to encompass the new base address
+      // 2) Use this member indice to adjust all others of the same derived type path...
+      // 3) What happens to those that are not in the path...? insert a negative one at the end 
+      //    probably...
+
+      // auto *negIdx = std::find(baseAddrIndex.begin(), baseAddrIndex.end(), -1);
+    /*  if (negIdx != baseAddrIndex.end()) {
         *negIdx = 0;
+        baseAddrIndex.push_back(-1);
+        for (size_t i = 0; i < memberIndices.size(); ++i)
+          memberIndices[i].push_back(-1);
       } else {
         baseAddrIndex.push_back(0);
         for (size_t i = 0; i < memberIndices.size(); ++i)
           memberIndices[i].push_back(-1);
-      }
-
-      memberIndices.insert(
-          std::next(memberIndices.begin(), mapMemberUsers[0].index + 1),
-          baseAddrIndex);
+      }*/
 
       mlir::DenseIntElementsAttr newEleAttr =
           createDenseElementsAttrFromIndices(memberIndices, builder);
+
+      // llvm::errs() << "after \n";
+      // newEleAttr.dump();
 
       mlir::Value descriptor = getDescriptorFromBoxMap(op, builder);
       auto baseAddr = getBaseAddrMap(descriptor, op.getBounds(),
@@ -219,7 +306,7 @@ class OMPMapInfoFinalizationPass
           newMemberOps.push_back(baseAddr);
         }
       }
-    
+
       mapMemberUsers[0].parent.getMembersMutable().assign(newMemberOps);
       mapMemberUsers[0].parent.setMembersIndexAttr(newEleAttr);
 
@@ -235,7 +322,11 @@ class OMPMapInfoFinalizationPass
           builder.getBoolAttr(false));
       op.replaceAllUsesWith(newDescParentMapOp);
       op->erase();
+
+      // newEleAttr.dump();
+
     } else { 
+      // llvm::errs() << "fall into 2 \n";
       mlir::Value descriptor = getDescriptorFromBoxMap(op, builder);
       auto baseAddr = getBaseAddrMap(descriptor, op.getBounds(),
                                      op.getMapType().value(), builder);
@@ -246,11 +337,14 @@ class OMPMapInfoFinalizationPass
       mlir::DenseIntElementsAttr newMembersAttr;
       mlir::SmallVector<mlir::Value> newMembers;
 
+    // llvm::errs() << "before \n";
+    // op.getMembersIndex()->dump();
+
       if (!op.getMembers().empty()) {
         auto memberIndices = getMemberIndicesAsVectors(op);
-        for (auto& indices : memberIndices) {
+        for (auto& indices : memberIndices)
           indices.insert(indices.begin(), 0);
-        }
+
         llvm::SmallVector<int> baseAddrIndex;
         baseAddrIndex.resize(memberIndices[0].size());
         std::fill(baseAddrIndex.begin(), baseAddrIndex.end(), -1);
@@ -268,6 +362,9 @@ class OMPMapInfoFinalizationPass
               llvm::ArrayRef<int32_t>({0}));
         newMembers.push_back(baseAddr);
       }
+
+    // llvm::errs() << "after \n";
+    // newMembersAttr.dump();
 
       newDescParentMapOp = builder.create<mlir::omp::MapInfoOp>(
           op->getLoc(), op.getResult().getType(), descriptor,
@@ -372,12 +469,6 @@ class OMPMapInfoFinalizationPass
     fir::KindMapping kindMap = fir::getKindMapping(module);
     fir::FirOpBuilder builder{module, std::move(kindMap)};
 
-// test works but now the mystery is why do we end up with the weird size for one map?
-
-// and is there a way to optimize the amount of data transferred, do we need to do a full 
-// map of the internal pointer of the descriptor, can we circumvent this in some way or are we just
-// stuck with it?
-
     module->walk([&](mlir::omp::MapInfoOp op) {
       // TODO: Currently only supports a single user for the MapInfoOp, this
       // is fine for the moment as the Fortran frontend will generate a
@@ -403,6 +494,8 @@ class OMPMapInfoFinalizationPass
     module->walk([&](mlir::omp::MapInfoOp op) {
       addImplicitMembersToTarget(op, builder, *op->getUsers().begin());
     });
+
+//    module.dump();
 
   }
 };

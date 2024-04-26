@@ -834,6 +834,15 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
   return op;
 }
 
+bool duplicateMemberMapInfo(
+    llvm::SmallVector<OmpMapMemberIndicesData> parentMembers,
+    llvm::SmallVector<int> memberIndices) {
+    for (auto memberData : parentMembers)
+      if (memberData.memberPlacementIndices == memberIndices)
+        return true;
+  return false;
+}
+
 bool ClauseProcessor::processMap(
     mlir::Location currentLocation, Fortran::lower::StatementContext &stmtCtx,
     mlir::omp::MapClauseOps &result,
@@ -924,7 +933,8 @@ bool ClauseProcessor::processMap(
                     Fortran::lower::getDataOperandBaseAddr(
                         converter, firOpBuilder, *parentSym, clauseLocation);
 
-                mlir::Type curType = fir::unwrapRefType(parentBaseAddr.addr.getType());
+                mlir::Type curType =
+                    fir::unwrapRefType(parentBaseAddr.addr.getType());
                 mlir::Value curValue = parentBaseAddr.addr;
 
                 for (size_t i = 0; i < indices.size(); ++i) {
@@ -952,8 +962,8 @@ bool ClauseProcessor::processMap(
                     //    ALLOCATABLE DESCRIPTOR, WE WILL
                     //      DOUBLE GENERATE MAPS.... IS THERE A WAY TO AVOID
                     //      THIS...? - PERHAPS CAN UTILISE ANOTHER LIST TO TRACK
-                    //      PARENTSYMBOLS AND INDICES AND THEN NOT GEN WHEN WE HAVE
-                    //      DUPLICATES...
+                    //      PARENTSYMBOLS AND INDICES AND THEN NOT GEN WHEN WE
+                    //      HAVE DUPLICATES...
                     // 2) Test other cases
                     //   1) I Will need to test this with mixed nesting of
                     //   allocatable
@@ -965,11 +975,13 @@ bool ClauseProcessor::processMap(
                     //      extend to cover the case...
                     //   3) What if there's arrays in the way etc. e.g. a member
                     //   is an array of derived types
-                    //   4) test with an array of allocatables dtypes or something
-                    //      in between to test the bounds generations works reasonably
-                    //      with the first test, there is no bounds in the intermediate
-                    //      elements, just the full size via type or struct, which works
-                    //      for derived types and scalars, but maybe not arrays..
+                    //   4) test with an array of allocatables dtypes or
+                    //   something
+                    //      in between to test the bounds generations works
+                    //      reasonably with the first test, there is no bounds
+                    //      in the intermediate elements, just the full size via
+                    //      type or struct, which works for derived types and
+                    //      scalars, but maybe not arrays..
                     // 4) Fix all cases this new method now breaks, which is a
                     // few
                     //    - can either do some pre-check to test if we need to
@@ -978,34 +990,43 @@ bool ClauseProcessor::processMap(
                     //    of code
                     // 5) Need to verify the IR generated is sane
 
-    // Problems/artifacts to fix/adjust:
-    //  1) Indices seem slightly wrong, would expect 6 after it goes through MapInfo pass
-    //  2) the derived type sizes calcualted from the struct type, seem slightly off, unsure why...
-    //  3) The first map seems okay for a single map, it isn't using the indices, because it's a 
-    //     full map as opposed to a member map I think as it is a single map, hence the indices 
-    //     never becoming an issue.. might get a little weird with multiple members when testing
-    //     a bit further
-    
-                    auto compExtValue = fir::factory::componentToExtendedValue(
-                        firOpBuilder, clauseLocation, curValue);
-                    auto compBounds = Fortran::lower::gatherBoundsOrBoundValues<
-                        mlir::omp::MapBoundsOp, mlir::omp::MapBoundsType>(
-                        firOpBuilder, clauseLocation, compExtValue, curValue);
-
-                    mlir::omp::MapInfoOp mapOp = createMapInfoOp(
-                        firOpBuilder, clauseLocation, curValue, mlir::Value{},
-                        asFortran.str(), compBounds, {},
-                        mlir::DenseIntElementsAttr{},
-                        static_cast<std::underlying_type_t<
-                            llvm::omp::OpenMPOffloadMappingFlags>>(mapTypeBits),
-                        mlir::omp::VariableCaptureKind::ByRef,
-                        curValue.getType());
-
-                    auto intermediateIndices = indices;;
+                    // Problems/artifacts to fix/adjust:
+                    //  1) Indices seem slightly wrong, would expect 6 after it
+                    //  goes through MapInfo pass 2) the derived type sizes
+                    //  calcualted from the struct type, seem slightly off,
+                    //  unsure why... 3) The first map seems okay for a single
+                    //  map, it isn't using the indices, because it's a
+                    //     full map as opposed to a member map I think as it is
+                    //     a single map, hence the indices never becoming an
+                    //     issue.. might get a little weird with multiple
+                    //     members when testing a bit further
+                    auto intermediateIndices = indices;
                     std::fill(std::next(intermediateIndices.begin(), i + 1),
                               intermediateIndices.end(), -1);
-                    parentMemberIndices[parentSym].push_back(
-                        {intermediateIndices, mapOp});
+                    if (!duplicateMemberMapInfo(parentMemberIndices[parentSym],
+                                               intermediateIndices)) {
+                      auto compExtValue =
+                          fir::factory::componentToExtendedValue(
+                              firOpBuilder, clauseLocation, curValue);
+                      auto compBounds =
+                          Fortran::lower::gatherBoundsOrBoundValues<
+                              mlir::omp::MapBoundsOp, mlir::omp::MapBoundsType>(
+                              firOpBuilder, clauseLocation, compExtValue,
+                              curValue);
+
+                      mlir::omp::MapInfoOp mapOp = createMapInfoOp(
+                          firOpBuilder, clauseLocation, curValue, mlir::Value{},
+                          asFortran.str(), compBounds, {},
+                          mlir::DenseIntElementsAttr{},
+                          static_cast<std::underlying_type_t<
+                              llvm::omp::OpenMPOffloadMappingFlags>>(
+                              mapTypeBits),
+                          mlir::omp::VariableCaptureKind::ByRef,
+                          curValue.getType());
+
+                      parentMemberIndices[parentSym].push_back(
+                          {intermediateIndices, mapOp});
+                    }
 
                     if (i != indices.size() - 1)
                       curValue = firOpBuilder.create<fir::LoadOp>(
