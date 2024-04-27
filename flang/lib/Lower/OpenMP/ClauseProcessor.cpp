@@ -837,9 +837,11 @@ createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
 bool duplicateMemberMapInfo(
     llvm::SmallVector<OmpMapMemberIndicesData> parentMembers,
     llvm::SmallVector<int> memberIndices) {
-    for (auto memberData : parentMembers)
-      if (memberData.memberPlacementIndices == memberIndices)
-        return true;
+  for (auto memberData : parentMembers)
+    if (std::equal(memberData.memberPlacementIndices.begin(),
+                   memberData.memberPlacementIndices.end(),
+                   memberIndices.begin()))
+      return true;
   return false;
 }
 
