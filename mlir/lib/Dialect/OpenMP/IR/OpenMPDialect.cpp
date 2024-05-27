@@ -1079,7 +1079,7 @@ static void printMembersIndex(OpAsmPrinter &p, MapInfoOp op,
                               DenseIntElementsAttr membersIdx) {
   llvm::ArrayRef<int64_t> shape = membersIdx.getShapedType().getShape();
   assert(shape.size() <= 2);
-  
+
   if (!membersIdx)
     return;
 
