@@ -18,6 +18,7 @@
 #include <flang/Lower/AbstractConverter.h>
 #include <flang/Lower/ConvertType.h>
 #include <flang/Lower/PFTBuilder.h>
+#include <flang/Lower/Support/Utils.h>
 #include <flang/Optimizer/Builder/FIRBuilder.h>
 #include <flang/Parser/parse-tree.h>
 #include <flang/Parser/tools.h>
@@ -375,6 +376,8 @@ void insertChildMapInfoIntoParent(
       if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
         symAddr = origSymbol;
 
+      Fortran::lower::omp::fillMemberIndices(
+          indices.second.memberPlacementIndices);
       mlir::Value mapOp = createMapInfoOp(
           converter.getFirOpBuilder(), symAddr.getLoc(), symAddr,
           /*varPtrPtr=*/mlir::Value(), asFortran.str(), bounds, members,

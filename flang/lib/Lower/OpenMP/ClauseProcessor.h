@@ -204,9 +204,9 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
           std::stringstream asFortran;
           std::optional<omp::Object> parentObj;
 
-          lower::AddrAndBoundsInfo info =
-              lower::gatherDataOperandAddrAndBounds<mlir::omp::MapBoundsOp,
-                                                    mlir::omp::MapBoundsType>(
+          Fortran::lower::AddrAndBoundsInfo info =
+              Fortran::lower::gatherDataOperandAddrAndBounds<
+                  mlir::omp::MapBoundsOp, mlir::omp::MapBoundsType>(
                   converter, firOpBuilder, semaCtx, stmtCtx, *object.sym(),
                   object.ref(), clauseLocation, asFortran, bounds,
                   treatIndexAsSection);

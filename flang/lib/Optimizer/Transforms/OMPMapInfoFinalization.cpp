@@ -25,6 +25,7 @@
 /// indirectly via a parent object.
 //===----------------------------------------------------------------------===//
 
+#include "flang/Lower/Support/Utils.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
