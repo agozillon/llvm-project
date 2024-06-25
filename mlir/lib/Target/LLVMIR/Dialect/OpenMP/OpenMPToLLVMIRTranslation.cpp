@@ -2319,17 +2319,8 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
       /*isSigned=*/false);
   combinedInfo.Sizes.push_back(size);
 
-  // TODO: This will need to be expanded to include the whole host of logic for
-  // the map flags that Clang currently supports (e.g. it should take the map
-  // flag of the parent map flag, remove the OMP_MAP_TARGET_PARAM and do some
-  // further case specific flag modifications). For the moment, it handles what
-  // we support as expected.
-  llvm::omp::OpenMPOffloadMappingFlags mapFlag =
-      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-
   llvm::omp::OpenMPOffloadMappingFlags memberOfFlag =
       ompBuilder.getMemberOfFlag(combinedInfo.BasePointers.size() - 1);
-  ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
 
   // This creates the initial MEMBER_OF mapping that consists of
   // the parent/top level container (same as above effectively, except
@@ -2338,6 +2329,12 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   // only relevant if the structure in its totality is being mapped,
   // otherwise the above suffices.
   if (!parentClause.getPartialMap()) {
+    // TODO: This will need to be expanded to include the whole host of logic
+    // for the map flags that Clang currently supports (e.g. it should do some
+    // further case specific flag modifications). For the moment, it handles
+    // what we support as expected.
+    llvm::omp::OpenMPOffloadMappingFlags mapFlag = mapData.Types[mapDataIndex];
+    ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
     combinedInfo.Types.emplace_back(mapFlag);
     combinedInfo.DevicePointers.emplace_back(
         llvm::OpenMPIRBuilder::DeviceInfoTy::None);
