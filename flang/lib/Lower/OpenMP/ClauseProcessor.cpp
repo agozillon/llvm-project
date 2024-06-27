@@ -971,6 +971,11 @@ bool ClauseProcessor::processMap(
                   object.ref(), clauseLocation, asFortran, bounds,
                   treatIndexAsSection);
 
+          // - 2 cases for automagic mapping of allocatables:
+          //   1) when a derived type is implicitly captured and not referenced by a map clause
+          //   2) when a derived type is explicitly mapped and referenced in a map clause
+          // - While waiting on Michael's response to clarify above, can look into weird broken
+          //   test case he brought up
           auto origSymbol = converter.getSymbolAddress(*object.sym());
           mlir::Value symAddr = info.addr;
           if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))

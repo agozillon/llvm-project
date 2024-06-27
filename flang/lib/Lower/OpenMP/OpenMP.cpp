@@ -1677,6 +1677,9 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       if (llvm::find(mapSyms, common) != mapSyms.end())
         return;
 
+    // TODO: Check interaction with common block implicit capture inside of
+    // a derived type...
+
     if (llvm::find(mapSyms, &sym) == mapSyms.end()) {
       mlir::Value baseOp = converter.getSymbolAddress(sym);
       if (!baseOp)
