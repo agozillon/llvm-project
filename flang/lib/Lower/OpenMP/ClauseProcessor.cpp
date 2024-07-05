@@ -971,7 +971,6 @@ bool ClauseProcessor::processMap(
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
           std::optional<omp::Object> parentObj;
-
           lower::AddrAndBoundsInfo info =
               lower::gatherDataOperandAddrAndBounds<mlir::omp::MapBoundsOp,
                                                     mlir::omp::MapBoundsType>(
@@ -979,16 +978,7 @@ bool ClauseProcessor::processMap(
                   object.ref(), clauseLocation, asFortran, bounds,
                   treatIndexAsSection);
 
-          // - 2 cases for automagic mapping of allocatables:
-          //   1) when a derived type is implicitly captured and not referenced by a map clause
-          //   2) when a derived type is explicitly mapped and referenced in a map clause
-          // - While waiting on Michael's response to clarify above, can look into weird broken
-          //   test case he brought up
-          auto origSymbol = converter.getSymbolAddress(*object.sym());
-          mlir::Value symAddr = info.addr;
-          if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
-            symAddr = origSymbol;
-
+          mlir::Value baseOp = info.rawInput;
           if (object.sym()->owner().IsDerivedType()) {
             omp::ObjectList objectList = gatherObjects(object, semaCtx);
             assert(!objectList.empty() &&
@@ -999,7 +989,7 @@ bool ClauseProcessor::processMap(
             if (isMemberOrParentAllocatableOrPointer(object, semaCtx)) {
               llvm::SmallVector<int64_t> indices;
               generateMemberPlacementIndices(object, indices, semaCtx);
-              symAddr = createParentSymAndGenIntermediateMaps(
+              baseOp = createParentSymAndGenIntermediateMaps(
                   clauseLocation, converter, objectList, indices,
                   parentMemberIndices[parentObj.value()], asFortran.str(),
                   mapTypeBits);
@@ -1011,16 +1001,15 @@ bool ClauseProcessor::processMap(
           // types to optimise
           auto location = mlir::NameLoc::get(
               mlir::StringAttr::get(firOpBuilder.getContext(), asFortran.str()),
-              symAddr.getLoc());
+              baseOp.getLoc());
           mlir::omp::MapInfoOp mapOp = createMapInfoOp(
-              firOpBuilder, location, symAddr,
+              firOpBuilder, location, baseOp,
               /*varPtrPtr=*/mlir::Value{}, asFortran.str(), bounds,
               /*members=*/{}, /*membersIndex=*/mlir::ArrayAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   mapTypeBits),
-              mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
-
+              mlir::omp::VariableCaptureKind::ByRef, baseOp.getType());
           if (parentObj.has_value()) {
             addChildIndexAndMapToParent(
                 object, parentMemberIndices[parentObj.value()], mapOp, semaCtx);
@@ -1028,9 +1017,9 @@ bool ClauseProcessor::processMap(
             result.mapVars.push_back(mapOp);
             ptrMapSyms->push_back(object.sym());
             if (mapSymTypes)
-              mapSymTypes->push_back(symAddr.getType());
+              mapSymTypes->push_back(baseOp.getType());
             if (mapSymLocs)
-              mapSymLocs->push_back(symAddr.getLoc());
+              mapSymLocs->push_back(baseOp.getLoc());
           }
         }
       });
