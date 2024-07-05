@@ -211,11 +211,7 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
                   object.ref(), clauseLocation, asFortran, bounds,
                   treatIndexAsSection);
 
-          auto origSymbol = converter.getSymbolAddress(*object.sym());
-          mlir::Value symAddr = info.addr;
-          if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
-            symAddr = origSymbol;
-
+           mlir::Value baseOp = info.rawInput;
           if (object.sym()->owner().IsDerivedType()) {
             omp::ObjectList objectList = gatherObjects(object, semaCtx);
             parentObj = objectList[0];
@@ -225,7 +221,7 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
                 memberHasAllocatableParent(object, semaCtx)) {
               llvm::SmallVector<int> indices =
                   generateMemberPlacementIndices(object, semaCtx);
-              symAddr = createParentSymAndGenIntermediateMaps(
+              baseOp = createParentSymAndGenIntermediateMaps(
                   clauseLocation, converter, objectList, indices,
                   parentMemberIndices[parentObj.value()], asFortran.str(),
                   mapTypeBits);
@@ -237,15 +233,15 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
           // types to optimise
           auto location = mlir::NameLoc::get(
               mlir::StringAttr::get(firOpBuilder.getContext(), asFortran.str()),
-              symAddr.getLoc());
+              baseOp.getLoc());
           mlir::omp::MapInfoOp mapOp = createMapInfoOp(
-              firOpBuilder, location, symAddr,
+              firOpBuilder, location, baseOp,
               /*varPtrPtr=*/mlir::Value{}, asFortran.str(), bounds,
               /*members=*/{}, /*membersIndex=*/mlir::DenseIntElementsAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   mapTypeBits),
-              mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
+              mlir::omp::VariableCaptureKind::ByRef, baseOp.getType());
 
           if (parentObj.has_value()) {
             addChildIndexAndMapToParent(
