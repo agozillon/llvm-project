@@ -478,24 +478,6 @@ class OMPMapInfoFinalizationPass
     return nullptr;
   }
 
-// this function could be useful if need to track down the storage source to 
-// differentiate a real box from a non-box type. 
-// static mlir::Value getStorageSource(mlir::Value var) {
-//   // TODO: define some kind of View interface for Fortran in FIR,
-//   // and use it in the FIR alias analysis.
-//   mlir::Value source = var;
-//   while (auto *op = source.getDefiningOp()) {
-//     if (auto designate = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
-//       source = designate.getMemref();
-//     } else if (auto declare = mlir::dyn_cast<hlfir::DeclareOp>(op)) {
-//       source = declare.getMemref();
-//     } else {
-//       break;
-//     }
-//   }
-//   return source;
-// }
-
   // This pass executes on omp::MapInfoOp's containing descriptor based types
   // (allocatables, pointers, assumed shape etc.) and expanding them into
   // multiple omp::MapInfoOp's for each pointer member contained within the
