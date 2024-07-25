@@ -281,10 +281,9 @@ getComponentObject(std::optional<Object> object,
   return getComponentObject(baseObj.value(), semaCtx);
 }
 
-static void
-generateMemberPlacementIndices(const Object &object,
-                               llvm::SmallVectorImpl<int> &indices,
-                               semantics::SemanticsContext &semaCtx) {
+void generateMemberPlacementIndices(const Object &object,
+                                    llvm::SmallVectorImpl<int> &indices,
+                                    semantics::SemanticsContext &semaCtx) {
   auto compObj = getComponentObject(object, semaCtx);
   while (compObj) {
     indices.push_back(getComponentPlacementInParent(compObj->sym()));
@@ -303,20 +302,6 @@ void addChildIndexAndMapToParent(const omp::Object &object,
   generateMemberPlacementIndices(object, indices, semaCtx);
   parentMemberIndices.memberPlacementIndices.push_back(indices);
   parentMemberIndices.memberMap.push_back(mapOp);
-}
-
-llvm::SmallVector<int>
-generateMemberPlacementIndices(const Object &object,
-                               Fortran::semantics::SemanticsContext &semaCtx) {
-  std::list<int> indices;
-  auto compObj = getComponentObject(object, semaCtx);
-  while (compObj) {
-    indices.push_front(getComponentPlacementInParent(compObj->sym()));
-    compObj =
-        getComponentObject(getBaseObject(compObj.value(), semaCtx), semaCtx);
-  }
-
-  return llvm::SmallVector<int>{std::begin(indices), std::end(indices)};
 }
 
 bool memberHasAllocatableParent(const Object &object,

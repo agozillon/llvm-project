@@ -978,8 +978,8 @@ bool ClauseProcessor::processMap(
             if (Fortran::semantics::IsAllocatableOrObjectPointer(
                     object.sym()) ||
                 memberHasAllocatableParent(object, semaCtx)) {
-              llvm::SmallVector<int> indices =
-                  generateMemberPlacementIndices(object, semaCtx);
+              llvm::SmallVector<int> indices;
+              generateMemberPlacementIndices(object, indices, semaCtx);
               baseOp = createParentSymAndGenIntermediateMaps(
                   clauseLocation, converter, objectList, indices,
                   parentMemberIndices[parentObj.value()], asFortran.str(),

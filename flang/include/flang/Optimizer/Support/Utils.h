@@ -36,7 +36,11 @@ inline std::int64_t toInt(mlir::arith::ConstantOp cop) {
 }
 
 // Reconstruct binding tables for dynamic dispatch.
-using BindingTable = llvm::DenseMap<llvm::StringRef, unsigned>;
+struct BindingInfo {
+  unsigned index;
+  mlir::SymbolRefAttr proc;
+};
+using BindingTable = llvm::DenseMap<llvm::StringRef, BindingInfo>;
 using BindingTables = llvm::DenseMap<llvm::StringRef, BindingTable>;
 
 inline void buildBindingTables(BindingTables &bindingTables,
@@ -54,7 +58,7 @@ inline void buildBindingTables(BindingTables &bindingTables,
     }
     for (auto dtEntry :
          typeInfo.getDispatchTable().front().getOps<fir::DTEntryOp>()) {
-      bindings[dtEntry.getMethod()] = bindingIdx;
+      bindings[dtEntry.getMethod()] = {bindingIdx, dtEntry.getProc()};
       ++bindingIdx;
     }
     bindingTables[typeInfo.getSymName()] = bindings;

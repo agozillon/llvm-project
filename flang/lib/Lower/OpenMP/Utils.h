@@ -58,9 +58,10 @@ struct OmpMapMemberIndicesData {
   llvm::SmallVector<mlir::omp::MapInfoOp> memberMap;
 };
 
-llvm::SmallVector<int>
+void
 generateMemberPlacementIndices(const Object &object,
-                               Fortran::semantics::SemanticsContext &semaCtx);
+                               llvm::SmallVectorImpl<int> &indices,
+                               semantics::SemanticsContext &semaCtx);
 
 bool memberHasAllocatableParent(const Object &object,
                                 Fortran::semantics::SemanticsContext &semaCtx);
