@@ -29,7 +29,9 @@
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
+#include "flang/Optimizer/Support/InternalNames.h"
 #include "flang/Optimizer/Transforms/Passes.h"
+#include "flang/Semantics/runtime-type-info.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -187,6 +189,122 @@ class OMPMapInfoFinalizationPass
         builder.getBoolAttr(false) /*partial_map*/);
   }
 
+  /// This function generates MapInfoOp's for each of the relevant descriptor
+  /// addendum components that are necessary. Currently this only maps the
+  /// top level addendum data and the binding descriptor data, the rest of the
+  /// relevant data components are left as a TODO for the moment when we
+  /// encounter examples that require them (allows us the ability to check the
+  /// components are appropriately being mapped).
+  void createAddendumMaps(
+      mlir::Value descriptor, mlir::SmallVector<mlir::Value> &newMembers,
+      mlir::SmallVector<mlir::SmallVector<int32_t>> &memberIndices,
+      fir::FirOpBuilder &builder) {
+    auto module = descriptor.getDefiningOp()->getParentOfType<mlir::ModuleOp>();
+    mlir::Location loc = descriptor.getLoc();
+
+    // get access to the mapped record types type descriptor, a blob of global
+    // constant data that is shared amongst identical types. For our case, we
+    // primarily just need the type, we'll map the data via the descriptor which
+    // holds a pointer to it. This only works for RecordTypes currently, which
+    // may be the only case it needs to work, however, we make sure we
+    // appropriately find a record type or emit an error as it's required for
+    // further steps.
+    fir::ClassType classType = mlir::dyn_cast<fir::ClassType>(
+        fir::unwrapRefType(descriptor.getType()));
+    mlir::Type declaredType = fir::getDerivedType(classType.getEleTy());
+    fir::RecordType recTy = mlir::dyn_cast<fir::RecordType>(declaredType);
+    mlir::Type typeDescTy;
+    if (recTy) {
+      std::string typeDescName =
+          fir::NameUniquer::getTypeDescriptorName(recTy.getName());
+      // FIXME/TODO: perhaps tag with declare target link Any, as it's a global
+      // constant shared amongst all similar type instantiations, and is also
+      // marked linkonce_odr.
+      if (auto global = module.lookupSymbol<fir::GlobalOp>(typeDescName))
+        typeDescTy = global.getType();
+    } else {
+      llvm_unreachable("unhandled addendum type");
+    }
+
+    // Access and map the addendum/derived type descriptor, the main blob of
+    // data which contains a lot of other descriptors containing relevant
+    // information about the original data stored in the descriptor type, things
+    // like procedure function pointer bindings
+    fir::RecordType typeDescRecTy = mlir::cast<fir::RecordType>(typeDescTy);
+    mlir::Value addendumAddr = builder.create<fir::BoxOffsetOp>(
+        loc, descriptor, fir::BoxFieldAttr::derived_type);
+
+    memberIndices.push_back({7, -1, -1});
+    newMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
+        loc, addendumAddr.getType(), descriptor,
+        mlir::TypeAttr::get(typeDescRecTy), addendumAddr,
+        mlir::SmallVector<mlir::Value>{}, mlir::DenseIntElementsAttr{},
+        mlir::SmallVector<mlir::Value>{},
+        builder.getIntegerAttr(
+            builder.getIntegerType(64, false),
+            static_cast<
+                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+                llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO)),
+        builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+            mlir::omp::VariableCaptureKind::ByRef),
+        builder.getStringAttr("derived type descriptor") /*name*/,
+        builder.getBoolAttr(false) /*partial_map*/));
+
+    // Load the original data descriptor so we can appropriately access it's
+    // type descriptor segment.
+    mlir::Value loadedDesc = descriptor;
+    if (fir::isa_ref_type(loadedDesc.getType()))
+      loadedDesc = builder.create<fir::LoadOp>(loc, descriptor);
+
+    // Load the type descriptor so we can access it's components to map the
+    // relevant data.
+    mlir::Type fieldTy = fir::FieldType::get(builder.getContext());
+    mlir::Type tdescType =
+        fir::TypeDescType::get(mlir::NoneType::get(builder.getContext()));
+    mlir::Value boxDesc =
+        builder.create<fir::BoxTypeDescOp>(loc, tdescType, loadedDesc);
+    boxDesc = builder.create<fir::ConvertOp>(
+        loc, fir::ReferenceType::get(typeDescTy), boxDesc);
+
+    // Retrieve the bindings descriptor and access its base address to map the
+    // attached data.
+    const char *bindingsCompName = Fortran::semantics::bindingDescCompName;
+    mlir::Value field = builder.create<fir::FieldIndexOp>(
+        loc, fieldTy, bindingsCompName, typeDescRecTy, mlir::ValueRange{});
+    mlir::Type coorTy =
+        fir::ReferenceType::get(typeDescRecTy.getType(bindingsCompName));
+    mlir::Value bindingBoxAddr =
+        builder.create<fir::CoordinateOp>(loc, coorTy, boxDesc, field);
+    mlir::Value bindingDataBaseAddr = builder.create<fir::BoxOffsetOp>(
+        loc, bindingBoxAddr, fir::BoxFieldAttr::base_addr);
+
+    // generate a map for the polymorphic bindings data.
+    memberIndices.push_back({7, 0, 0});
+    newMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
+        loc, bindingDataBaseAddr.getType(), descriptor,
+        mlir::TypeAttr::get(
+            llvm::cast<mlir::omp::PointerLikeType>(
+                fir::unwrapRefType(bindingDataBaseAddr.getType()))
+                .getElementType()),
+        bindingDataBaseAddr, mlir::SmallVector<mlir::Value>{},
+        mlir::DenseIntElementsAttr{}, mlir::SmallVector<mlir::Value>{},
+        builder.getIntegerAttr(
+            builder.getIntegerType(64, false),
+            static_cast<
+                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+                llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO)),
+        builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+            mlir::omp::VariableCaptureKind::ByRef),
+        builder.getStringAttr("polymorphic bindings") /*name*/,
+        builder.getBoolAttr(false) /*partial_map*/));
+
+    // TODO: Add further addendum component mappings as necessary.
+
+    // Make sure to adjust all member indices to be of the same length
+    // prepending -1s as necessary.
+    Fortran::lower::omp::fillMemberIndices(memberIndices);
+  }
+
   /// This function adjusts the member indices vector to include a new
   /// base address member, we take the position of the descriptor in
   /// the member indices list, which is the index data that the base
@@ -204,7 +322,7 @@ class OMPMapInfoFinalizationPass
   /// with the addition of the new base address index value).
   void adjustMemberIndices(
       llvm::SmallVector<llvm::SmallVector<int32_t>> &memberIndices,
-      size_t memberIndex) {
+      size_t memberIndex, size_t addrIndex) {
     // Find if the descriptor member we are basing our new base address index
     // off of has a -1 somewhere, indicating an empty index already exists (due
     // to a larger sized member position elsewhere) which allows us to simplify
@@ -218,9 +336,9 @@ class OMPMapInfoFinalizationPass
     // index list and have to push on a 0 and adjust the position to the new
     // end.
     if (iterPos != baseAddrIndex.end()) {
-      *iterPos = 0;
+      *iterPos = addrIndex;
     } else {
-      baseAddrIndex.push_back(0);
+      baseAddrIndex.push_back(addrIndex);
       iterPos = baseAddrIndex.end();
     }
 
@@ -249,7 +367,7 @@ class OMPMapInfoFinalizationPass
           continue;
 
         memberIndices[i].insert(
-            std::next(memberIndices[i].begin(), insertPosition), 0);
+            std::next(memberIndices[i].begin(), insertPosition), addrIndex);
       }
     }
 
@@ -309,6 +427,7 @@ class OMPMapInfoFinalizationPass
     mlir::Value descriptor = getDescriptorFromBoxMap(op, builder);
     auto baseAddr = getBaseAddrMap(descriptor, op.getBounds(),
                                    op.getMapType().value(), builder);
+
     mlir::DenseIntElementsAttr newMembersAttr;
     mlir::SmallVector<mlir::Value> newMembers;
     llvm::SmallVector<llvm::SmallVector<int32_t>> memberIndices;
@@ -325,8 +444,7 @@ class OMPMapInfoFinalizationPass
     // are expanding a parent that is a descriptor and we have to adjust all of
     // it's members to reflect the insertion of the base address.
     if (!mapMemberUsers.empty()) {
-      auto baseAddrIndex = memberIndices[mapMemberUsers[0].index];
-      adjustMemberIndices(memberIndices, mapMemberUsers[0].index);
+      adjustMemberIndices(memberIndices, mapMemberUsers[0].index, 0);
       llvm::SmallVector<mlir::Value> newMemberOps;
       mlir::OperandRange membersArr = mapMemberUsers[0].parent.getMembers();
       for (size_t i = 0; i < membersArr.size(); ++i) {
@@ -341,7 +459,7 @@ class OMPMapInfoFinalizationPass
                                                                   builder));
     } else {
       newMembers.push_back(baseAddr);
-      if (!op.getMembers().empty()) {
+      if (!op.getMembers().empty() || !memberIndices.empty()) {
         for (auto &indices : memberIndices)
           indices.insert(indices.begin(), 0);
         llvm::SmallVector<int> baseAddrIndex;
@@ -350,18 +468,23 @@ class OMPMapInfoFinalizationPass
         baseAddrIndex[0] = 0;
         memberIndices.insert(memberIndices.begin(), baseAddrIndex);
         Fortran::lower::omp::fillMemberIndices(memberIndices);
+
         newMembersAttr =
             Fortran::lower::omp::createDenseElementsAttrFromIndices(
                 memberIndices, builder);
         newMembers.append(op.getMembers().begin(), op.getMembers().end());
       } else {
-        newMembersAttr = mlir::DenseIntElementsAttr::get(
-            mlir::VectorType::get(
-                llvm::ArrayRef<int64_t>({1, 1}),
-                mlir::IntegerType::get(builder.getContext(), 32)),
-            llvm::ArrayRef<int32_t>({0}));
+        memberIndices.push_back({0});
+        newMembersAttr =
+            Fortran::lower::omp::createDenseElementsAttrFromIndices(
+                memberIndices, builder);
       }
     }
+
+   fir::BaseBoxType boxType =
+        mlir::cast<fir::BaseBoxType>(fir::unwrapRefType(descriptor.getType()));
+    if (fir::boxHasAddendum(boxType))
+      createAddendumMaps(descriptor, newMembers, memberIndices, builder);
 
     mlir::omp::MapInfoOp newDescParentMapOp =
         builder.create<mlir::omp::MapInfoOp>(
