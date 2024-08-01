@@ -181,9 +181,7 @@ private:
 template <typename T>
 bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
                                            mlir::omp::MapClauseOps &result) {
-  std::map<const semantics::Symbol *,
-           llvm::SmallVector<OmpMapMemberIndicesData>>
-      parentMemberIndices;
+  std::map<omp::Object, OmpMapMemberIndicesData> parentMemberIndices;
   llvm::SmallVector<const semantics::Symbol *> mapSymbols;
 
   bool clauseFound = findRepeatableClause<T>(
@@ -204,6 +202,7 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
         for (const omp::Object &object : objects) {
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
+          std::optional<omp::Object> parentObj;
 
           lower::AddrAndBoundsInfo info =
               lower::gatherDataOperandAddrAndBounds<mlir::omp::MapBoundsOp,
@@ -217,21 +216,38 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
           if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
             symAddr = origSymbol;
 
+          if (object.sym()->owner().IsDerivedType()) {
+            omp::ObjectList objectList = gatherObjects(object, semaCtx);
+            parentObj = objectList[0];
+            parentMemberIndices.insert({parentObj.value(), {}});
+            if (isMemberOrParentAllocatableOrPointer(object, semaCtx)) {
+              llvm::SmallVector<int64_t> indices;
+              generateMemberPlacementIndices(object, indices, semaCtx);
+              symAddr = createParentSymAndGenIntermediateMaps(
+                  clauseLocation, converter, objectList, indices,
+                  parentMemberIndices[parentObj.value()], asFortran.str(),
+                  mapTypeBits);
+            }
+          }
+
           // Explicit map captures are captured ByRef by default,
           // optimisation passes may alter this to ByCopy or other capture
           // types to optimise
+          auto location = mlir::NameLoc::get(
+              mlir::StringAttr::get(firOpBuilder.getContext(), asFortran.str()),
+              symAddr.getLoc());
           mlir::omp::MapInfoOp mapOp = createMapInfoOp(
-              firOpBuilder, clauseLocation, symAddr,
+              firOpBuilder, location, symAddr,
               /*varPtrPtr=*/mlir::Value{}, asFortran.str(), bounds,
-              /*members=*/{}, /*membersIndex=*/mlir::DenseIntElementsAttr{},
+              /*members=*/{}, /*membersIndex=*/mlir::ArrayAttr{},
               static_cast<
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   mapTypeBits),
               mlir::omp::VariableCaptureKind::ByRef, symAddr.getType());
 
-          if (object.sym()->owner().IsDerivedType()) {
-            addChildIndexAndMapToParent(object, parentMemberIndices, mapOp,
-                                        semaCtx);
+          if (parentObj.has_value()) {
+            addChildIndexAndMapToParent(
+                object, parentMemberIndices[parentObj.value()], mapOp, semaCtx);
           } else {
             result.mapVars.push_back(mapOp);
             mapSymbols.push_back(object.sym());
@@ -239,9 +255,9 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
         }
       });
 
-  insertChildMapInfoIntoParent(converter, parentMemberIndices, result.mapVars,
-                               mapSymbols,
-                               /*mapSymTypes=*/nullptr, /*mapSymLocs=*/nullptr);
+  insertChildMapInfoIntoParent(
+      converter, semaCtx, parentMemberIndices, result.mapVars,
+      /*mapSymTypes=*/nullptr, /*mapSymLocs=*/nullptr, &mapSymbols);
   return clauseFound;
 }
 
