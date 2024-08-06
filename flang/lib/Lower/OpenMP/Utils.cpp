@@ -376,8 +376,6 @@ void insertChildMapInfoIntoParent(
       if (origSymbol && fir::isTypeWithDescriptor(origSymbol.getType()))
         symAddr = origSymbol;
 
-      Fortran::lower::omp::fillMemberIndices(
-          indices.second.memberPlacementIndices);
       mlir::Value mapOp = createMapInfoOp(
           converter.getFirOpBuilder(), symAddr.getLoc(), symAddr,
           /*varPtrPtr=*/mlir::Value(), asFortran.str(), bounds, members,

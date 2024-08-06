@@ -201,7 +201,7 @@ class OMPMapInfoFinalizationPass
   /// components are appropriately being mapped).
   void createAddendumMaps(
       mlir::Value descriptor, mlir::SmallVector<mlir::Value> &newMembers,
-      mlir::SmallVector<mlir::SmallVector<int32_t>> &memberIndices,
+      mlir::SmallVector<mlir::SmallVector<int64_t>> &memberIndices,
       fir::FirOpBuilder &builder) {
     auto module = descriptor.getDefiningOp()->getParentOfType<mlir::ModuleOp>();
     mlir::Location loc = descriptor.getLoc();
@@ -213,22 +213,23 @@ class OMPMapInfoFinalizationPass
     // may be the only case it needs to work, however, we make sure we
     // appropriately find a record type or emit an error as it's required for
     // further steps.
-    fir::ClassType classType = mlir::dyn_cast<fir::ClassType>(
-        fir::unwrapRefType(descriptor.getType()));
-    mlir::Type declaredType = fir::getDerivedType(classType.getEleTy());
-    fir::RecordType recTy = mlir::dyn_cast<fir::RecordType>(declaredType);
+    mlir::Type descTy = fir::unwrapRefType(descriptor.getType());
+    if (fir::isPolymorphicType(descTy))
+      descTy = mlir::cast<fir::ClassType>(descTy).getEleTy();
+    if (mlir::isa<fir::BaseBoxType>(descTy))
+      descTy = fir::dyn_cast_ptrOrBoxEleTy(descTy);
+    fir::RecordType recTy =
+        mlir::dyn_cast<fir::RecordType>(fir::getDerivedType(descTy));
+    assert(recTy && "expected fir.record type");
+
+    // FIXME/TODO: perhaps tag with declare target link Any, as it's a global
+    // constant shared amongst all similar type instantiations, and is also
+    // marked linkonce_odr.
     mlir::Type typeDescTy;
-    if (recTy) {
-      std::string typeDescName =
-          fir::NameUniquer::getTypeDescriptorName(recTy.getName());
-      // FIXME/TODO: perhaps tag with declare target link Any, as it's a global
-      // constant shared amongst all similar type instantiations, and is also
-      // marked linkonce_odr.
-      if (auto global = module.lookupSymbol<fir::GlobalOp>(typeDescName))
-        typeDescTy = global.getType();
-    } else {
-      llvm_unreachable("unhandled addendum type");
-    }
+    if (auto global = module.lookupSymbol<fir::GlobalOp>(
+            fir::NameUniquer::getTypeDescriptorName(recTy.getName())))
+      typeDescTy = global.getType();
+    assert(typeDescTy && "expected type descriptor type");
 
     // Access and map the addendum/derived type descriptor, the main blob of
     // data which contains a lot of other descriptors containing relevant
@@ -238,11 +239,11 @@ class OMPMapInfoFinalizationPass
     mlir::Value addendumAddr = builder.create<fir::BoxOffsetOp>(
         loc, descriptor, fir::BoxFieldAttr::derived_type);
 
-    memberIndices.push_back({7, -1, -1});
+    memberIndices.push_back({7});
     newMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
         loc, addendumAddr.getType(), descriptor,
         mlir::TypeAttr::get(typeDescRecTy), addendumAddr,
-        mlir::SmallVector<mlir::Value>{}, mlir::DenseIntElementsAttr{},
+        mlir::SmallVector<mlir::Value>{}, mlir::ArrayAttr{},
         mlir::SmallVector<mlir::Value>{},
         builder.getIntegerAttr(
             builder.getIntegerType(64, false),
@@ -291,7 +292,7 @@ class OMPMapInfoFinalizationPass
                 fir::unwrapRefType(bindingDataBaseAddr.getType()))
                 .getElementType()),
         bindingDataBaseAddr, mlir::SmallVector<mlir::Value>{},
-        mlir::DenseIntElementsAttr{}, mlir::SmallVector<mlir::Value>{},
+        mlir::ArrayAttr{}, mlir::SmallVector<mlir::Value>{},
         builder.getIntegerAttr(
             builder.getIntegerType(64, false),
             static_cast<
@@ -303,10 +304,6 @@ class OMPMapInfoFinalizationPass
         builder.getBoolAttr(false) /*partial_map*/));
 
     // TODO: Add further addendum component mappings as necessary.
-
-    // Make sure to adjust all member indices to be of the same length
-    // prepending -1s as necessary.
-    Fortran::lower::omp::fillMemberIndices(memberIndices);
   }
 
   /// This function adjusts the member indices vector to include a new
@@ -322,10 +319,10 @@ class OMPMapInfoFinalizationPass
   /// address index value).
   void adjustMemberIndices(
       llvm::SmallVector<llvm::SmallVector<int64_t>> &memberIndices,
+      llvm::SmallVector<llvm::SmallVector<int64_t>> &addendumIndices,
       size_t memberIndex) {
     llvm::SmallVector<int64_t> baseAddrIndex = memberIndices[memberIndex];
     baseAddrIndex.push_back(0);
-
     // If we find another member that is "derived/a member of" the descriptor
     // that is not the descriptor itself, we must insert a 0 for the new base
     // address we have just added for the descriptor into the list at the
@@ -338,7 +335,7 @@ class OMPMapInfoFinalizationPass
           std::equal(baseAddrIndex.begin(), std::prev(baseAddrIndex.end()),
                      memberIndices[i].begin())) {
         memberIndices[i].insert(
-            std::next(memberIndices[i].begin(), insertPosition), addrIndex);
+            std::next(memberIndices[i].begin(), insertPosition), 0);
       }
     }
 
@@ -346,6 +343,17 @@ class OMPMapInfoFinalizationPass
     // the correct location.
     memberIndices.insert(std::next(memberIndices.begin(), memberIndex + 1),
                          baseAddrIndex);
+
+    // Create and insert any addendum indices that we may have generated for our
+    // addendum members.
+    if (!addendumIndices.empty())
+      for (auto [j, addendumIdx] : llvm::enumerate(addendumIndices)) {
+        llvm::SmallVector<int64_t> addendumIndex = memberIndices[memberIndex];
+        addendumIndex.append(addendumIdx);
+        memberIndices.insert(
+            std::next(memberIndices.begin(), memberIndex + (2 + j)),
+            addendumIndex);
+      }
   }
 
   /// Adjusts the descriptors map type the main alteration that is done
@@ -397,10 +405,16 @@ class OMPMapInfoFinalizationPass
     mlir::Value descriptor = getDescriptorFromBoxMap(op, builder);
     auto baseAddr = getBaseAddrMap(descriptor, op.getBounds(),
                                    op.getMapType().value_or(0), builder);
+
+    mlir::SmallVector<mlir::Value> addendumMembers;
+    llvm::SmallVector<llvm::SmallVector<int64_t>> addendumIndices;
+    if (fir::boxHasAddendum(mlir::cast<fir::BaseBoxType>(
+            fir::unwrapRefType(descriptor.getType()))))
+      createAddendumMaps(descriptor, addendumMembers, addendumIndices, builder);
+
     mlir::ArrayAttr newMembersAttr;
     mlir::SmallVector<mlir::Value> newMembers;
     llvm::SmallVector<llvm::SmallVector<int64_t>> memberIndices;
-
     if (!mapMemberUsers.empty() || !op.getMembers().empty())
       getMemberIndicesAsVectors(
           !mapMemberUsers.empty() ? mapMemberUsers[0].parent : op,
@@ -421,34 +435,34 @@ class OMPMapInfoFinalizationPass
       // clauses to allow sharing of duplicate maps across target
       // operations.
       ParentAndPlacement mapUser = mapMemberUsers[0];
-      adjustMemberIndices(memberIndices, mapUser.index);
+      adjustMemberIndices(memberIndices, addendumIndices, mapUser.index);
+
       llvm::SmallVector<mlir::Value> newMemberOps;
       for (auto v : mapUser.parent.getMembers()) {
         newMemberOps.push_back(v);
-        if (v == op)
+        if (v == op) {
           newMemberOps.push_back(baseAddr);
+          if (!addendumMembers.empty())
+            for (auto v2 : addendumMembers)
+              newMemberOps.push_back(v2);
+        }
       }
+
       mapUser.parent.getMembersMutable().assign(newMemberOps);
       mapUser.parent.setMembersIndexAttr(
           builder.create2DIntegerArrayAttr(memberIndices));
     } else {
       newMembers.push_back(baseAddr);
-      if (!op.getMembers().empty() || !memberIndices.empty()) {
-        for (auto &indices : memberIndices)
-          indices.insert(indices.begin(), 0);
-        memberIndices.insert(memberIndices.begin(), {0});
-        newMembersAttr = builder.create2DIntegerArrayAttr(memberIndices);
-        newMembers.append(op.getMembers().begin(), op.getMembers().end());
-      } else {
-        llvm::SmallVector<llvm::SmallVector<int64_t>> memberIdx = {{0}};
-        newMembersAttr = builder.create2DIntegerArrayAttr(memberIdx);
+      for (auto &indices : memberIndices)
+        indices.insert(indices.begin(), 0);
+      memberIndices.insert(memberIndices.begin(), {0});
+      newMembers.append(op.getMembers().begin(), op.getMembers().end());
+      if (!addendumMembers.empty()) {
+        memberIndices.append(addendumIndices);
+        newMembers.append(addendumMembers);
       }
+      newMembersAttr = builder.create2DIntegerArrayAttr(memberIndices);
     }
-
-   fir::BaseBoxType boxType =
-        mlir::cast<fir::BaseBoxType>(fir::unwrapRefType(descriptor.getType()));
-    if (fir::boxHasAddendum(boxType))
-      createAddendumMaps(descriptor, newMembers, memberIndices, builder);
 
     mlir::omp::MapInfoOp newDescParentMapOp =
         builder.create<mlir::omp::MapInfoOp>(
