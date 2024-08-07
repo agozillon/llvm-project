@@ -31,6 +31,7 @@
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
 #include "flang/Optimizer/Support/InternalNames.h"
 #include "flang/Optimizer/Transforms/Passes.h"
+#include "flang/Optimizer/Support/Utils.h"
 #include "flang/Semantics/runtime-type-info.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
@@ -255,53 +256,81 @@ class OMPMapInfoFinalizationPass
         builder.getStringAttr("derived type descriptor") /*name*/,
         builder.getBoolAttr(false) /*partial_map*/));
 
-    // Load the original data descriptor so we can appropriately access it's
-    // type descriptor segment.
-    mlir::Value loadedDesc = descriptor;
-    if (fir::isa_ref_type(loadedDesc.getType()))
-      loadedDesc = builder.create<fir::LoadOp>(loc, descriptor);
+    // Check if we have any bindings to actually map, before inserting a map
+    // if we insert a map when there is no binding information, we run the 
+    // risk of causing a runtime error in the OpenMP runtime, as the pointer
+    // that we access for the bindings will be null. Alternatives to this
+    // are to:
+    // 1) Alter the OpenMP runtime to skip nullary host pointers, with a
+    //   warning, this sounds like a breaking change however, and makes issues
+    //   likely harder to detect.
+    // 2) Alter the fortran runtime to always allocate data for the bindings
+    //    so that they're not nullary, downside being memory overhead in the
+    //    runtime that's unneccesary alongside un-required data movement.
+    // 3) Alter the OpenMP MLIR -> LLVM-IR map generation to have branching
+    //    behaviour for map insertion, where we check if a pointer has been
+    //    allocated
+    // 4) Work out another way to see if the bindings will be used inside of a
+    //    target region for the record type and skip the map gen that way. The
+    //    most likely candidate would be to search for fir/hlfir dispatch operations
+    //    inside of the target for the record type. If there are none, we don't
+    //    need the information and don't need to map it, which works out as an
+    //    optimisation as no map will be generated similar to the current skip
+    //    method.
+    fir::BindingTables bindingTables;
+    fir::buildBindingTables(bindingTables, module);
+    auto bindingsIter = bindingTables.find(recTy.getName());
+    if (bindingsIter == bindingTables.end())
+      emitError(loc) << "cannot find binding table for " << recTy.getName();
+    if (!bindingsIter->getSecond().empty()) {
+      // Load the original data descriptor so we can appropriately access it's
+      // type descriptor segment.
+      mlir::Value loadedDesc = descriptor;
+      if (fir::isa_ref_type(loadedDesc.getType()))
+        loadedDesc = builder.create<fir::LoadOp>(loc, descriptor);
 
-    // Load the type descriptor so we can access it's components to map the
-    // relevant data.
-    mlir::Type fieldTy = fir::FieldType::get(builder.getContext());
-    mlir::Type tdescType =
-        fir::TypeDescType::get(mlir::NoneType::get(builder.getContext()));
-    mlir::Value boxDesc =
-        builder.create<fir::BoxTypeDescOp>(loc, tdescType, loadedDesc);
-    boxDesc = builder.create<fir::ConvertOp>(
-        loc, fir::ReferenceType::get(typeDescTy), boxDesc);
+      // Load the type descriptor so we can access it's components to map the
+      // relevant data.
+      mlir::Type fieldTy = fir::FieldType::get(builder.getContext());
+      mlir::Type tdescType =
+          fir::TypeDescType::get(mlir::NoneType::get(builder.getContext()));
+      mlir::Value boxDesc =
+          builder.create<fir::BoxTypeDescOp>(loc, tdescType, loadedDesc);
+      boxDesc = builder.create<fir::ConvertOp>(
+          loc, fir::ReferenceType::get(typeDescTy), boxDesc);
 
-    // Retrieve the bindings descriptor and access its base address to map the
-    // attached data.
-    const char *bindingsCompName = Fortran::semantics::bindingDescCompName;
-    mlir::Value field = builder.create<fir::FieldIndexOp>(
-        loc, fieldTy, bindingsCompName, typeDescRecTy, mlir::ValueRange{});
-    mlir::Type coorTy =
-        fir::ReferenceType::get(typeDescRecTy.getType(bindingsCompName));
-    mlir::Value bindingBoxAddr =
-        builder.create<fir::CoordinateOp>(loc, coorTy, boxDesc, field);
-    mlir::Value bindingDataBaseAddr = builder.create<fir::BoxOffsetOp>(
-        loc, bindingBoxAddr, fir::BoxFieldAttr::base_addr);
+      // Retrieve the bindings descriptor and access its base address to map the
+      // attached data.
+      const char *bindingsCompName = Fortran::semantics::bindingDescCompName;
+      mlir::Value field = builder.create<fir::FieldIndexOp>(
+          loc, fieldTy, bindingsCompName, typeDescRecTy, mlir::ValueRange{});
+      mlir::Type coorTy =
+          fir::ReferenceType::get(typeDescRecTy.getType(bindingsCompName));
+      mlir::Value bindingBoxAddr =
+          builder.create<fir::CoordinateOp>(loc, coorTy, boxDesc, field);
+      mlir::Value bindingDataBaseAddr = builder.create<fir::BoxOffsetOp>(
+          loc, bindingBoxAddr, fir::BoxFieldAttr::base_addr);
 
-    // generate a map for the polymorphic bindings data.
-    memberIndices.push_back({7, 0, 0});
-    newMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
-        loc, bindingDataBaseAddr.getType(), descriptor,
-        mlir::TypeAttr::get(
-            llvm::cast<mlir::omp::PointerLikeType>(
-                fir::unwrapRefType(bindingDataBaseAddr.getType()))
-                .getElementType()),
-        bindingDataBaseAddr, mlir::SmallVector<mlir::Value>{},
-        mlir::ArrayAttr{}, mlir::SmallVector<mlir::Value>{},
-        builder.getIntegerAttr(
-            builder.getIntegerType(64, false),
-            static_cast<
-                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-                llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO)),
-        builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
-            mlir::omp::VariableCaptureKind::ByRef),
-        builder.getStringAttr("polymorphic bindings") /*name*/,
-        builder.getBoolAttr(false) /*partial_map*/));
+      // generate a map for the polymorphic bindings data.
+      memberIndices.push_back({7, 0, 0});
+      newMembers.push_back(builder.create<mlir::omp::MapInfoOp>(
+          loc, bindingDataBaseAddr.getType(), descriptor,
+          mlir::TypeAttr::get(
+              llvm::cast<mlir::omp::PointerLikeType>(
+                  fir::unwrapRefType(bindingDataBaseAddr.getType()))
+                  .getElementType()),
+          bindingDataBaseAddr, mlir::SmallVector<mlir::Value>{},
+          mlir::ArrayAttr{}, mlir::SmallVector<mlir::Value>{},
+          builder.getIntegerAttr(
+              builder.getIntegerType(64, false),
+              static_cast<
+                  std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+                  llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO)),
+          builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+              mlir::omp::VariableCaptureKind::ByRef),
+          builder.getStringAttr("polymorphic bindings") /*name*/,
+          builder.getBoolAttr(false) /*partial_map*/));
+    }
 
     // TODO: Add further addendum component mappings as necessary.
   }

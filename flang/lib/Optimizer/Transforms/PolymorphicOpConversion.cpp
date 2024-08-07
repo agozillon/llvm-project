@@ -107,7 +107,7 @@ struct DispatchOpConv : public OpConversionPattern<fir::DispatchOp> {
     if (bindingIter == bindingTable.end())
       return emitError(loc)
              << "cannot find binding for " << dispatch.getMethod();
-    unsigned bindingIdx = bindingIter->second;
+    unsigned bindingIdx = bindingIter->second.index;
 
     mlir::Value passedObject = dispatch.getObject();
 
