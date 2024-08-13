@@ -2621,49 +2621,49 @@ static int getMapDataMemberIdx(MapInfoData &mapData, omp::MapInfoOp memberOp) {
   return std::distance(mapData.MapClause.begin(), res);
 }
 
-static omp::MapInfoOp getFirstOrLastMappedMemberPtr(omp::MapInfoOp mapInfo,
-                                                    bool first) {
-  DenseIntElementsAttr indexAttr = mapInfo.getMembersIndexAttr();
-
+static mlir::omp::MapInfoOp
+getFirstOrLastMappedMemberPtr(mlir::omp::MapInfoOp mapInfo, bool first) {
+  mlir::ArrayAttr indexAttr = mapInfo.getMembersIndexAttr();
   // Only 1 member has been mapped, we can return it.
   if (indexAttr.size() == 1)
     if (auto mapOp =
             dyn_cast<omp::MapInfoOp>(mapInfo.getMembers()[0].getDefiningOp()))
       return mapOp;
 
-  llvm::ArrayRef<int64_t> shape = indexAttr.getShapedType().getShape();
-  llvm::SmallVector<size_t> indices(shape[0]);
+  llvm::SmallVector<size_t> indices(indexAttr.size());
   std::iota(indices.begin(), indices.end(), 0);
 
-  llvm::sort(indices.begin(), indices.end(),
-             [&](const size_t a, const size_t b) {
-               auto indexValues = indexAttr.getValues<int32_t>();
-               for (int i = 0; i < shape[1]; ++i) {
-                 int aIndex = indexValues[a * shape[1] + i];
-                 int bIndex = indexValues[b * shape[1] + i];
+  llvm::sort(
+      indices.begin(), indices.end(), [&](const size_t a, const size_t b) {
+        auto memberIndicesA = mlir::cast<mlir::ArrayAttr>(indexAttr[a]);
+        auto memberIndicesB = mlir::cast<mlir::ArrayAttr>(indexAttr[b]);
 
-                 if (aIndex == bIndex)
-                   continue;
+        size_t smallestMember = memberIndicesA.size() < memberIndicesB.size()
+                                    ? memberIndicesA.size()
+                                    : memberIndicesB.size();
+        for (size_t i = 0; i < smallestMember; ++i) {
+          int64_t aIndex =
+              mlir::cast<mlir::IntegerAttr>(memberIndicesA.getValue()[i])
+                  .getInt();
+          int64_t bIndex =
+              mlir::cast<mlir::IntegerAttr>(memberIndicesB.getValue()[i])
+                  .getInt();
 
-                 if (aIndex != -1 && bIndex == -1)
-                   return false;
+          if (aIndex == bIndex)
+            continue;
 
-                 if (aIndex == -1 && bIndex != -1)
-                   return true;
+          if (aIndex < bIndex)
+            return first;
 
-                 // A is earlier in the record type layout than B
-                 if (aIndex < bIndex)
-                   return first;
+          if (aIndex > bIndex)
+            return !first;
+        }
 
-                 if (bIndex < aIndex)
-                   return !first;
-               }
-
-               // Iterated the entire list and couldn't make a decision, all
-               // elements were likely the same. Return false, since the sort
-               // comparator should return false for equal elements.
-               return false;
-             });
+        // Iterated up until the end of the smallest member and
+        // they were found to be equal up to that point, so select
+        // the member with the lowest index count, so the "parent"
+        return memberIndicesA.size() < memberIndicesB.size();
+      });
 
   return llvm::cast<omp::MapInfoOp>(
       mapInfo.getMembers()[indices.front()].getDefiningOp());

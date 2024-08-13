@@ -372,6 +372,7 @@ bool CodeGenAction::beginSourceFileAction() {
     return false;
   }
 
+
   // Print initial full MLIR module, before lowering or transformations, if
   // -save-temps has been specified.
   if (!saveMLIRTempFile(ci.getInvocation(), *mlirModule, getCurrentFile(),

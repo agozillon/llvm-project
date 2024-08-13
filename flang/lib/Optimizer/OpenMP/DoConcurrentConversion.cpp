@@ -50,7 +50,7 @@ createMapInfoOp(mlir::OpBuilder &builder, mlir::Location loc,
                 mlir::Value baseAddr, mlir::Value varPtrPtr, std::string name,
                 llvm::ArrayRef<mlir::Value> bounds,
                 llvm::ArrayRef<mlir::Value> members,
-                mlir::DenseIntElementsAttr membersIndex, uint64_t mapType,
+                mlir::ArrayAttr membersIndex, uint64_t mapType,
                 mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
                 bool partialMap = false) {
   if (auto boxTy = llvm::dyn_cast<fir::BaseBoxType>(baseAddr.getType())) {
@@ -195,7 +195,7 @@ void cloneOrMapRegionOutsiders(fir::FirOpBuilder &builder,
             builder, copyVal.getLoc(), copyVal,
             /*varPtrPtr=*/mlir::Value{}, name.str(), bounds,
             /*members=*/llvm::SmallVector<mlir::Value>{},
-            /*membersIndex=*/mlir::DenseIntElementsAttr{},
+            /*membersIndex=*/mlir::ArrayAttr{},
             static_cast<
                 std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                 llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT),
@@ -797,7 +797,7 @@ private:
         rewriter, liveIn.getLoc(), rawAddr,
         /*varPtrPtr=*/{}, declareOp.getUniqName().str(), boundsOps,
         /*members=*/{},
-        /*membersIndex=*/mlir::DenseIntElementsAttr{},
+        /*membersIndex=*/mlir::ArrayAttr{},
         static_cast<
             std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
             mapFlag),
