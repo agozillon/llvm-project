@@ -6,7 +6,7 @@
 // that includes fortran allocatables in various locations of the record types
 // hierarchy.
 
-module attributes {omp.is_target_device = false} {
+module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-amd-amdhsa"]} {
   llvm.func @omp_map_derived_type_allocatable_member(%arg0: !llvm.ptr) {
     %0 = llvm.mlir.constant(4 : index) : i64
     %1 = llvm.mlir.constant(1 : index) : i64
@@ -133,7 +133,7 @@ module attributes {omp.is_target_device = false} {
 
 // CHECK: %[[LOAD_ALLOCATABLE_MEMBER_BADDR:.*]] = load ptr, ptr %[[ALLOCATABLE_MEMBER_BADDR]], align 8
 // CHECK: %[[ARR_OFFSET:.*]] = getelementptr inbounds i32, ptr %[[LOAD_ALLOCATABLE_MEMBER_BADDR]], i64 0
-// CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_1:.*]] = getelementptr { ptr, i64, i32, i8, i8, i8, i8, [1 x [3 x i64]] }, ptr %[[DTYPE_ALLOCATABLE_MEMBER_GEP]], i64 1
+// CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_1:.*]] = getelementptr i32, ptr %[[ARR_OFFSET]], i64 1
 // CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_2:.*]] = ptrtoint ptr %[[DTYPE_SIZE_SEGMENT_CALC_1]] to i64
 // CHECK:  %[[DTYPE_SIZE_SEGMENT_CALC_3:.*]] = ptrtoint ptr %[[DTYPE_ALLOCATABLE_MEMBER_GEP]] to i64
 // CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_4:.*]] = sub i64 %[[DTYPE_SIZE_SEGMENT_CALC_2]], %[[DTYPE_SIZE_SEGMENT_CALC_3]]
@@ -304,7 +304,7 @@ module attributes {omp.is_target_device = false} {
 // CHECK: %[[NESTED_ALLOCATABLE_MEMBER_BADDR_GEP:.*]] = getelementptr { ptr, i64, i32, i8, i8, i8, i8, [1 x [3 x i64]] }, ptr %[[NESTED_ALLOCATABLE_MEMBER_GEP]], i32 0, i32 0
 // CHECK: %[[NESTED_ALLOCATABLE_MEMBER_BADDR_LOAD:.*]] = load ptr, ptr %[[NESTED_ALLOCATABLE_MEMBER_BADDR_GEP]], align 8
 // CHECK: %[[ARR_OFFSET:.*]] = getelementptr inbounds i32, ptr %[[NESTED_ALLOCATABLE_MEMBER_BADDR_LOAD]], i64 0
-// CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_1:.*]] = getelementptr { ptr, i64, i32, i8, i8, i8, i8, [1 x [3 x i64]] }, ptr %[[NESTED_ALLOCATABLE_MEMBER_GEP]], i64 1
+// CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_1:.*]] = getelementptr i32, ptr %[[ARR_OFFSET]], i64 1
 // CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_2:.*]] = ptrtoint ptr %[[DTYPE_SIZE_SEGMENT_CALC_1]] to i64
 // CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_3:.*]] = ptrtoint ptr %[[NESTED_ALLOCATABLE_MEMBER_GEP]] to i64
 // CHECK: %[[DTYPE_SIZE_SEGMENT_CALC_4:.*]] = sub i64 %[[DTYPE_SIZE_SEGMENT_CALC_2]], %[[DTYPE_SIZE_SEGMENT_CALC_3]]
