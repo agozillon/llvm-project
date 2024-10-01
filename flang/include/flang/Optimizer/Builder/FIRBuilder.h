@@ -212,6 +212,11 @@ public:
                             llvm::ArrayRef<mlir::Value> lenParams,
                             bool asTarget = false);
 
+  /// Create a two dimensional ArrayAttr containing integer data as
+  /// IntegerAttrs, effectively: ArrayAttr<ArrayAttr<IntegerAttr>>>.
+  mlir::ArrayAttr create2DIntegerArrayAttr(
+      llvm::SmallVectorImpl<llvm::SmallVector<int64_t>> &intData);
+
   /// Create a temporary using `fir.alloca`. This function does not hoist.
   /// It is the callers responsibility to set the insertion point if
   /// hoisting is required.
