@@ -1528,11 +1528,11 @@ static LogicalResult verifyMapClause(Operation *op, OperandRange mapVars) {
                            "specified, other map types are not permitted");
         }
 
-        if (!to && !from) {
-          return emitError(op->getLoc(),
-                           "at least one of to or from map types must be "
-                           "specified, other map types are not permitted");
-        }
+        // if (!to && !from) {
+        //   return emitError(op->getLoc(),
+        //                    "at least one of to or from map types must be "
+        //                    "specified, other map types are not permitted");
+        // }
 
         auto updateVar = mapInfoOp.getVarPtr();
 

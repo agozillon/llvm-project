@@ -151,9 +151,12 @@
 ; GCN-O0-NEXT:        Lazy Machine Block Frequency Analysis
 ; GCN-O0-NEXT:        Machine Optimization Remark Emitter
 ; GCN-O0-NEXT:        Stack Frame Layout Analysis
-; GCN-O0-NEXT:        Function register usage analysis
-; GCN-O0-NEXT:        AMDGPU Assembly Printer
-; GCN-O0-NEXT:        Free MachineFunction
+; GCN-O0-NEXT:    Function register usage analysis
+; GCN-O0-NEXT:    FunctionPass Manager
+; GCN-O0-NEXT:      Lazy Machine Block Frequency Analysis
+; GCN-O0-NEXT:      Machine Optimization Remark Emitter
+; GCN-O0-NEXT:      AMDGPU Assembly Printer
+; GCN-O0-NEXT:      Free MachineFunction
 
 ; GCN-O1:Target Library Information
 ; GCN-O1-NEXT:Target Pass Configuration
@@ -431,9 +434,12 @@
 ; GCN-O1-NEXT:        Lazy Machine Block Frequency Analysis
 ; GCN-O1-NEXT:        Machine Optimization Remark Emitter
 ; GCN-O1-NEXT:        Stack Frame Layout Analysis
-; GCN-O1-NEXT:        Function register usage analysis
-; GCN-O1-NEXT:        AMDGPU Assembly Printer
-; GCN-O1-NEXT:        Free MachineFunction
+; GCN-O1-NEXT:    Function register usage analysis
+; GCN-O1-NEXT:    FunctionPass Manager
+; GCN-O1-NEXT:      Lazy Machine Block Frequency Analysis
+; GCN-O1-NEXT:      Machine Optimization Remark Emitter
+; GCN-O1-NEXT:      AMDGPU Assembly Printer
+; GCN-O1-NEXT:      Free MachineFunction
 
 ; GCN-O1-OPTS:Target Library Information
 ; GCN-O1-OPTS-NEXT:Target Pass Configuration
@@ -739,9 +745,12 @@
 ; GCN-O1-OPTS-NEXT:        Lazy Machine Block Frequency Analysis
 ; GCN-O1-OPTS-NEXT:        Machine Optimization Remark Emitter
 ; GCN-O1-OPTS-NEXT:        Stack Frame Layout Analysis
-; GCN-O1-OPTS-NEXT:        Function register usage analysis
-; GCN-O1-OPTS-NEXT:        AMDGPU Assembly Printer
-; GCN-O1-OPTS-NEXT:        Free MachineFunction
+; GCN-O1-OPTS-NEXT:    Function register usage analysis
+; GCN-O1-OPTS-NEXT:    FunctionPass Manager
+; GCN-O1-OPTS-NEXT:      Lazy Machine Block Frequency Analysis
+; GCN-O1-OPTS-NEXT:      Machine Optimization Remark Emitter
+; GCN-O1-OPTS-NEXT:      AMDGPU Assembly Printer
+; GCN-O1-OPTS-NEXT:      Free MachineFunction
 
 ; GCN-O2:Target Library Information
 ; GCN-O2-NEXT:Target Pass Configuration
@@ -1053,9 +1062,12 @@
 ; GCN-O2-NEXT:        Lazy Machine Block Frequency Analysis
 ; GCN-O2-NEXT:        Machine Optimization Remark Emitter
 ; GCN-O2-NEXT:        Stack Frame Layout Analysis
-; GCN-O2-NEXT:        Function register usage analysis
-; GCN-O2-NEXT:        AMDGPU Assembly Printer
-; GCN-O2-NEXT:        Free MachineFunction
+; GCN-O2-NEXT:    Function register usage analysis
+; GCN-O2-NEXT:    FunctionPass Manager
+; GCN-O2-NEXT:      Lazy Machine Block Frequency Analysis
+; GCN-O2-NEXT:      Machine Optimization Remark Emitter
+; GCN-O2-NEXT:      AMDGPU Assembly Printer
+; GCN-O2-NEXT:      Free MachineFunction
 
 ; GCN-O3:Target Library Information
 ; GCN-O3-NEXT:Target Pass Configuration
@@ -1379,9 +1391,12 @@
 ; GCN-O3-NEXT:        Lazy Machine Block Frequency Analysis
 ; GCN-O3-NEXT:        Machine Optimization Remark Emitter
 ; GCN-O3-NEXT:        Stack Frame Layout Analysis
-; GCN-O3-NEXT:        Function register usage analysis
-; GCN-O3-NEXT:        AMDGPU Assembly Printer
-; GCN-O3-NEXT:        Free MachineFunction
+; GCN-O3-NEXT:    Function register usage analysis
+; GCN-O3-NEXT:    FunctionPass Manager
+; GCN-O3-NEXT:      Lazy Machine Block Frequency Analysis
+; GCN-O3-NEXT:      Machine Optimization Remark Emitter
+; GCN-O3-NEXT:      AMDGPU Assembly Printer
+; GCN-O3-NEXT:      Free MachineFunction
 
 define void @empty() {
   ret void
