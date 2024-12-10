@@ -6741,6 +6741,12 @@ FunctionCallee OpenMPIRBuilder::createDispatchDeinitFunction() {
   return getOrCreateRuntimeFunction(M, omp::OMPRTL___kmpc_dispatch_deinit);
 }
 
+static Value *removeASCastIfPresent(Value *V) {
+  if (Operator::getOpcode(V) == Instruction::AddrSpaceCast)
+    return cast<Operator>(V)->getOperand(0);
+  return V;
+}
+
 static Expected<Function *> createOutlinedFunction(
     OpenMPIRBuilder &OMPBuilder, IRBuilderBase &Builder, StringRef FuncName,
     SmallVectorImpl<Value *> &Inputs,
@@ -6902,9 +6908,9 @@ static Expected<Function *> createOutlinedFunction(
     // preceding mapped arguments that refer to the same global that may be
     // seperate segments. To prevent this, we defer global processing until all
     // other processing has been performed.
-    if (llvm::isa<llvm::GlobalValue>(std::get<0>(InArg)) ||
-        llvm::isa<llvm::GlobalObject>(std::get<0>(InArg)) ||
-        llvm::isa<llvm::GlobalVariable>(std::get<0>(InArg))) {
+    if (llvm::isa<llvm::GlobalValue>(removeASCastIfPresent(Input)) ||
+        llvm::isa<llvm::GlobalObject>(removeASCastIfPresent(Input)) ||
+        llvm::isa<llvm::GlobalVariable>(removeASCastIfPresent(Input))) {
       DeferredReplacement.push_back(std::make_pair(Input, InputCopy));
       continue;
     }
