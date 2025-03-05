@@ -1647,7 +1647,7 @@ static void genTargetClauses(
     lower::AbstractConverter &converter, semantics::SemanticsContext &semaCtx,
     lower::StatementContext &stmtCtx, lower::pft::Evaluation &eval,
     const List<Clause> &clauses, mlir::Location loc,
-    mlir::omp::TargetOperands &clauseOps,
+    mlir::omp::TargetOperands &clauseOps, DefaultMapsTy &defaultMaps,
     llvm::SmallVectorImpl<const semantics::Symbol *> &hasDeviceAddrSyms,
     llvm::SmallVectorImpl<const semantics::Symbol *> &isDevicePtrSyms,
     llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms) {
@@ -1667,9 +1667,11 @@ static void genTargetClauses(
   cp.processNowait(clauseOps);
   cp.processThreadLimit(stmtCtx, clauseOps);
 
-  cp.processTODO<clause::Allocate, clause::Defaultmap, clause::Firstprivate,
-                 clause::InReduction, clause::UsesAllocators>(
-      loc, llvm::omp::Directive::OMPD_target);
+  cp.processDefaultMap(defaultMaps, stmtCtx);
+
+  cp.processTODO<clause::Allocate, clause::Firstprivate, clause::InReduction,
+                 clause::UsesAllocators>(loc,
+                                         llvm::omp::Directive::OMPD_target);
 
   // `target private(..)` is only supported in delayed privatization mode.
   if (!enableDelayedPrivatizationStaging)
@@ -2183,14 +2185,142 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
   mlir::omp::TargetOperands clauseOps;
   llvm::SmallVector<const semantics::Symbol *> mapSyms, isDevicePtrSyms,
       hasDeviceAddrSyms;
+  DefaultMapsTy defaultMaps;
   genTargetClauses(converter, semaCtx, stmtCtx, eval, item->clauses, loc,
-                   clauseOps, hasDeviceAddrSyms, isDevicePtrSyms, mapSyms);
+                   clauseOps, defaultMaps, hasDeviceAddrSyms, isDevicePtrSyms,
+                   mapSyms);
 
   DataSharingProcessor dsp(converter, semaCtx, item->clauses, eval,
                            /*shouldCollectPreDeterminedSymbols=*/
                            lower::omp::isLastItemInQueue(item, queue),
                            /*useDelayedPrivatization=*/true, symTable);
   dsp.processStep1(&clauseOps);
+
+  // Return the map type for bitshift, or just the implicitbehaviour?
+  // TODO: Rememver record types are a bit weird in that they end up entirely
+  // mapped
+  //  so may need some special handling, need to test it.
+  // TODO/SELFNOTE: REMEMBER BYREF/BYVAL HAS TO CHANGE AS WELL BASED ON MAP TYPE
+  // SELECTED OR WE'LL GET SOME ERRORS.
+  auto getDefaultmapIfPresent = [&](mlir::Type varType) {
+    using defMap = clause::Defaultmap;
+    auto exists = [&](defMap::VariableCategory varCat) {
+      return defaultMaps.find(varCat) != defaultMaps.end();
+    };
+
+    if (defaultMaps.empty())
+      return defMap::ImplicitBehavior::Default;
+
+    // if there is an all, return early, we don't care about the type of the
+    // variable.
+    if (exists(defMap::VariableCategory::All))
+      return defaultMaps[defMap::VariableCategory::All];
+
+    // Type is a Scalar
+    // NOTE: Unsure if complex and/or vector falls into a scalar type
+    // or aggregate, but the current default implicit behaviour is to
+    // treat them as such (c_ptr has its own behaviour, so perhaps
+    // being lumped in as a scalar isn't the right thing).
+    if ((fir::isa_trivial(varType) || fir::isa_char(varType) ||
+         fir::isa_builtin_cptr_type(varType)) &&
+        exists(defMap::VariableCategory::Scalar))
+      return defaultMaps[defMap::VariableCategory::Scalar];
+
+    // Type is an pointer
+    if (fir::isPointerType(varType) &&
+        exists(defMap::VariableCategory::Pointer))
+      return defaultMaps[defMap::VariableCategory::Pointer];
+
+    // Type is an allocatable
+    if (fir::isAllocatableType(varType) &&
+        exists(defMap::VariableCategory::Allocatable))
+      return defaultMaps[defMap::VariableCategory::Allocatable];
+
+    // Type is an aggregate
+    if (fir::isa_aggregate(varType) &&
+        exists(defMap::VariableCategory::Aggregate)) {
+      return defaultMaps[defMap::VariableCategory::Aggregate];
+    }
+
+    return defMap::ImplicitBehavior::Default;
+  };
+
+  auto getImplicitMapTypeAndKind = [&](mlir::Type varType,
+                                       const semantics::Symbol &sym) {
+    using defMap = clause::Defaultmap;
+    llvm::omp::OpenMPOffloadMappingFlags mapFlag =
+        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
+
+    auto implicitBehaviour = getDefaultmapIfPresent(varType);
+    if (implicitBehaviour == defMap::ImplicitBehavior::Default) {
+      mlir::omp::VariableCaptureKind captureKind =
+          mlir::omp::VariableCaptureKind::ByRef;
+
+      // If a variable is specified in declare target link and if device
+      // type is not specified as `nohost`, it needs to be mapped tofrom
+      mlir::ModuleOp mod = firOpBuilder.getModule();
+      mlir::Operation *op = mod.lookupSymbol(converter.mangleName(sym));
+      auto declareTargetOp =
+          llvm::dyn_cast_if_present<mlir::omp::DeclareTargetInterface>(op);
+      if (declareTargetOp && declareTargetOp.isDeclareTarget()) {
+        if (declareTargetOp.getDeclareTargetCaptureClause() ==
+                mlir::omp::DeclareTargetCaptureClause::link &&
+            declareTargetOp.getDeclareTargetDeviceType() !=
+                mlir::omp::DeclareTargetDeviceType::nohost) {
+          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+        }
+      } else if (fir::isa_trivial(varType) || fir::isa_char(varType)) {
+        captureKind = mlir::omp::VariableCaptureKind::ByCopy;
+      } else if (!fir::isa_builtin_cptr_type(varType)) {
+        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+      }
+      return std::make_pair(mapFlag, captureKind);
+    }
+
+    switch (implicitBehaviour) {
+    case defMap::ImplicitBehavior::Alloc:
+      return std::make_pair(llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE,
+                            mlir::omp::VariableCaptureKind::ByRef);
+      break;
+    case defMap::ImplicitBehavior::Firstprivate:
+      TODO(loc,
+           "Defaultmap implicit Firstprivate behaviour currently unsupported");
+      break;
+    case defMap::ImplicitBehavior::From:
+      return std::make_pair(mapFlag |=
+                            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM,
+                            mlir::omp::VariableCaptureKind::ByRef);
+      break;
+    case defMap::ImplicitBehavior::Present:
+      return std::make_pair(
+          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT,
+          mlir::omp::VariableCaptureKind::ByRef);
+      break;
+    case defMap::ImplicitBehavior::To:
+      return std::make_pair(mapFlag |=
+                            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO,
+                            mlir::omp::VariableCaptureKind::ByCopy);
+      break;
+    case defMap::ImplicitBehavior::Tofrom:
+      return std::make_pair(mapFlag |=
+                            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM |
+                            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO,
+                            mlir::omp::VariableCaptureKind::ByRef);
+      break;
+    case defMap::ImplicitBehavior::Default:
+    case defMap::ImplicitBehavior::None:
+      llvm_unreachable(
+          "Implicit None Behaviour Should Have Been Handled Earlier");
+      break;
+    }
+
+    return std::make_pair(mapFlag |=
+                          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM |
+                          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO,
+                          mlir::omp::VariableCaptureKind::ByRef);
+  };
 
   // 5.8.1 Implicit Data-Mapping Attribute Rules
   // The following code follows the implicit data-mapping rules to map all the
@@ -2237,43 +2367,27 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       fir::factory::AddrAndBoundsInfo info =
           Fortran::lower::getDataOperandBaseAddr(
               converter, firOpBuilder, sym, converter.getCurrentLocation());
-      llvm::SmallVector<mlir::Value> bounds =
-          fir::factory::genImplicitBoundsOps<mlir::omp::MapBoundsOp,
-                                             mlir::omp::MapBoundsType>(
-              firOpBuilder, info, dataExv,
-              semantics::IsAssumedSizeArray(sym.GetUltimate()),
-              converter.getCurrentLocation());
-
-      llvm::omp::OpenMPOffloadMappingFlags mapFlag =
-          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
-      mlir::omp::VariableCaptureKind captureKind =
-          mlir::omp::VariableCaptureKind::ByRef;
 
       mlir::Value baseOp = info.rawInput;
       mlir::Type eleType = baseOp.getType();
       if (auto refType = mlir::dyn_cast<fir::ReferenceType>(baseOp.getType()))
         eleType = refType.getElementType();
 
-      // If a variable is specified in declare target link and if device
-      // type is not specified as `nohost`, it needs to be mapped tofrom
-      mlir::ModuleOp mod = firOpBuilder.getModule();
-      mlir::Operation *op = mod.lookupSymbol(converter.mangleName(sym));
-      auto declareTargetOp =
-          llvm::dyn_cast_if_present<mlir::omp::DeclareTargetInterface>(op);
-      if (declareTargetOp && declareTargetOp.isDeclareTarget()) {
-        if (declareTargetOp.getDeclareTargetCaptureClause() ==
-                mlir::omp::DeclareTargetCaptureClause::link &&
-            declareTargetOp.getDeclareTargetDeviceType() !=
-                mlir::omp::DeclareTargetDeviceType::nohost) {
-          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-          mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-        }
-      } else if (fir::isa_trivial(eleType) || fir::isa_char(eleType)) {
-        captureKind = mlir::omp::VariableCaptureKind::ByCopy;
-      } else if (!fir::isa_builtin_cptr_type(eleType)) {
-        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-        mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-      }
+      // There is no implicit capture of this type due to defaultmap
+      // None being specified for the type, so we early exit.
+      // TODO: Find a way to exit earlier than the invocation of
+      // getDataOperandBaseAddr to save the optimizer some work
+      if (getDefaultmapIfPresent(eleType) ==
+          clause::Defaultmap::ImplicitBehavior::None)
+        return;
+
+      auto mapFlagAndKind = getImplicitMapTypeAndKind(eleType, sym);
+      llvm::SmallVector<mlir::Value> bounds =
+          fir::factory::genImplicitBoundsOps<mlir::omp::MapBoundsOp,
+                                             mlir::omp::MapBoundsType>(
+              firOpBuilder, info, dataExv,
+              semantics::IsAssumedSizeArray(sym.GetUltimate()),
+              converter.getCurrentLocation());
       auto location =
           mlir::NameLoc::get(mlir::StringAttr::get(firOpBuilder.getContext(),
                                                    sym.name().ToString()),
@@ -2284,8 +2398,8 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
           /*membersIndex=*/mlir::ArrayAttr{},
           static_cast<
               std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-              mapFlag),
-          captureKind, baseOp.getType());
+              std::get<0>(mapFlagAndKind)),
+          std::get<1>(mapFlagAndKind), baseOp.getType());
 
       clauseOps.mapVars.push_back(mapOp);
       mapSyms.push_back(&sym);
@@ -3433,6 +3547,7 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
         !std::holds_alternative<clause::Copyin>(clause.u) &&
         !std::holds_alternative<clause::Copyprivate>(clause.u) &&
         !std::holds_alternative<clause::Default>(clause.u) &&
+        !std::holds_alternative<clause::Defaultmap>(clause.u) &&
         !std::holds_alternative<clause::Depend>(clause.u) &&
         !std::holds_alternative<clause::Filter>(clause.u) &&
         !std::holds_alternative<clause::Final>(clause.u) &&

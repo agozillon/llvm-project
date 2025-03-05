@@ -109,6 +109,12 @@ struct OmpMapParentAndMemberData {
                                    semantics::SemanticsContext &semaCtx);
 };
 
+// // Helper class for tracking the user specified implicit behaviour for data
+// // types for the scope of a target region.
+// struct DefaultMapInfo {
+//     Defmap::VariableCategory
+// };
+
 mlir::omp::MapInfoOp
 createMapInfoOp(fir::FirOpBuilder &builder, mlir::Location loc,
                 mlir::Value baseAddr, mlir::Value varPtrPtr,

@@ -808,6 +808,32 @@ bool ClauseProcessor::processCopyprivate(
   return hasCopyPrivate;
 }
 
+bool ClauseProcessor::processDefaultMap(
+    DefaultMapsTy &result, lower::StatementContext &stmtCtx) const {
+  // TODO: Emit todos for anything we don't currently support and can add later.
+  auto process = [&](const omp::clause::Defaultmap &clause,
+                     const parser::CharBlock &) {
+    using Defmap = omp::clause::Defaultmap;
+    clause::Defaultmap::VariableCategory variableCategory =
+        Defmap::VariableCategory::All;
+    // Variable Category is optional, if not specified defaults to all.
+    // Multiples of the same category are illegal as are any other
+    // defaultmaps being specified when a user specified all is in place,
+    // however, this should be handled earlier during semantics.
+    if (auto varCat =
+            std::get<std::optional<Defmap::VariableCategory>>(clause.t))
+      variableCategory = varCat.value_or(Defmap::VariableCategory::All);
+    auto behaviour = std::get<Defmap::ImplicitBehavior>(clause.t);
+    result.insert({variableCategory, behaviour});
+  };
+
+  // If we find an "all", we can likely interrupt and return, but might just be
+  // more trivial to parse all, and then check if we've specified all with
+  // anything else and then emit an error (or just leave that up to semantics
+  // and select the all at this stage).
+  return findRepeatableClause<omp::clause::Defaultmap>(process);
+}
+
 bool ClauseProcessor::processDepend(mlir::omp::DependClauseOps &result) const {
   auto process = [&](const omp::clause::Depend &clause,
                      const parser::CharBlock &) {
