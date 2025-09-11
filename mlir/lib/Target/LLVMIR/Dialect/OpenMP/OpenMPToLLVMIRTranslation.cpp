@@ -4036,6 +4036,136 @@ calculateBoundsOffset(LLVM::ModuleTranslation &moduleTranslation,
   return idx;
 }
 
+// The intent is to verify if the mapped data being passed is a
+// pointer -> pointee that requires special handling in certain cases,
+// e.g. applying the OMP_MAP_PTR_AND_OBJ map type.
+//
+// There may be a better way to verify this, but unfortunately with
+// opaque pointers we lose the ability to easily check if something is
+// a pointer whilst maintaining access to the underlying type.
+static bool checkIfPointerMap(omp::MapInfoOp mapOp) {
+  // If we have a varPtrPtr field assigned then the underlying type is a pointer
+  if (mapOp.getVarPtrPtr())
+    return true;
+
+  // If the map data is declare target with a link clause, then it's represented
+  // as a pointer when we lower it to LLVM-IR even if at the MLIR level it has
+  // no relation to pointers.
+  if (isDeclareTargetLink(mapOp.getVarPtr()))
+    return true;
+
+  return false;
+}
+
+static void processIndividualMap(MapInfoData &mapData, size_t mapDataIdx,
+                                 MapInfosTy &combinedInfo, bool isTargetParams,
+                                 int mapDataParentIdx = -1) {
+  // Declare Target Mappings are excluded from being marked as
+  // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
+  // marked with OMP_MAP_PTR_AND_OBJ instead.
+  auto mapFlag = mapData.Types[mapDataIdx];
+  auto mapInfoOp = llvm::cast<omp::MapInfoOp>(mapData.MapClause[mapDataIdx]);
+
+  bool isPtrTy = checkIfPointerMap(mapInfoOp);
+  if (isPtrTy && mapData.IsDeclareTarget[mapDataIdx])
+    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+
+  if (isTargetParams && !mapData.IsDeclareTarget[mapDataIdx])
+    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+
+  if (mapInfoOp.getMapCaptureType() == omp::VariableCaptureKind::ByCopy &&
+      !isPtrTy)
+    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
+
+  // if we're provided a mapDataParentIdx, then the data being mapped is
+  // part of a larger object (in a parent <-> member mapping) and in this
+  // case our BasePointer should be the parent.
+  if (mapDataParentIdx >= 0)
+    combinedInfo.BasePointers.emplace_back(
+        mapData.BasePointers[mapDataParentIdx]);
+  else
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIdx]);
+
+  combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIdx]);
+  combinedInfo.DevicePointers.emplace_back(mapData.DevicePointers[mapDataIdx]);
+  combinedInfo.Mappers.emplace_back(mapData.Mappers[mapDataIdx]);
+  combinedInfo.Names.emplace_back(mapData.Names[mapDataIdx]);
+  combinedInfo.Types.emplace_back(mapFlag);
+  combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIdx]);
+}
+
+// This functions similarly to the check in the OpenMP offload runtime,
+// if we have an attach map type and the size is larger than the 8-bytes
+// for a regular pointer, then it's a descriptor. No other types should
+// be flagged with the attach map type.
+bool isDescriptorMap(LLVM::ModuleTranslation &moduleTranslation,
+                     llvm::Type *type,
+                     llvm::omp::OpenMPOffloadMappingFlags mapType) {
+  if ((mapType & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH) !=
+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH)
+    return false;
+  auto dataLayout = moduleTranslation.getLLVMModule()->getDataLayout();
+  if ((dataLayout.getTypeSizeInBits(type) / 8) <= 8)
+    return false;
+  return true;
+}
+
+void processAttachMap(LLVM::ModuleTranslation &moduleTranslation,
+                      llvm::IRBuilderBase &builder,
+                      llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
+                      MapInfosTy &combinedInfo, MapInfoData &mapData,
+                      uint64_t mapDataIndex, bool isTargetParams) {
+  auto parentClause =
+      llvm::cast<omp::MapInfoOp>(mapData.MapClause[mapDataIndex]);
+  bool isDescriptor = isDescriptorMap(
+      moduleTranslation, mapData.BaseType[mapDataIndex],
+      llvm::omp::OpenMPOffloadMappingFlags(parentClause.getMapType()));
+  if (isDescriptor) {
+    // This is the mapping we need for regular descriptor map attachment.
+    // base pointer, pointer, size
+    // &descriptor, &descriptor, sizeof(descriptor)
+    // &pointee, &pointee, sizeof(pointee)
+    // &descriptor, &pointee, sizeof(descriptor)
+    llvm::omp::OpenMPOffloadMappingFlags descMapType =
+        llvm::omp::OpenMPOffloadMappingFlags(parentClause.getMapType());
+    if (isTargetParams)
+      descMapType |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+    // We move attatch onto the "binding" attatch map, the initial map
+    // sends across the data.
+    descMapType &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH;
+    combinedInfo.Types.emplace_back(descMapType);
+    combinedInfo.DevicePointers.emplace_back(
+        mapData.DevicePointers[mapDataIndex]);
+    combinedInfo.Mappers.emplace_back(mapData.Mappers[mapDataIndex]);
+    combinedInfo.Names.emplace_back(LLVM::createMappingInformation(
+        mapData.MapClause[mapDataIndex]->getLoc(), ompBuilder));
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIndex]);
+    combinedInfo.Sizes.push_back(mapData.Sizes[mapDataIndex]);
+
+    // Currently, Fortran descriptors should only have a single member that
+    // corresponds to the data base address.
+    auto memberClause = llvm::cast<omp::MapInfoOp>(
+        parentClause.getMembers()[0].getDefiningOp());
+    int memberDataIdx = getMapDataMemberIdx(mapData, memberClause);
+    assert(memberDataIdx >= 0 && "could not find mapped member of structure");
+    processIndividualMap(mapData, memberDataIdx, combinedInfo, isTargetParams);
+
+    combinedInfo.Types.emplace_back(
+        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH);
+    combinedInfo.DevicePointers.emplace_back(
+        mapData.DevicePointers[mapDataIndex]);
+    combinedInfo.Mappers.emplace_back(mapData.Mappers[mapDataIndex]);
+    combinedInfo.Names.emplace_back(LLVM::createMappingInformation(
+        mapData.MapClause[mapDataIndex]->getLoc(), ompBuilder));
+    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIndex]);
+    combinedInfo.Pointers.emplace_back(mapData.Pointers[memberDataIdx]);
+    combinedInfo.Sizes.push_back(mapData.Sizes[mapDataIndex]);
+  }
+
+  assert(isDescriptor && "Non-descriptor attach maps currently unsupported");
+}
+
 // This creates two insertions into the MapInfosTy data structure for the
 // "parent" of a set of members, (usually a container e.g.
 // class/structure/derived type) when subsequent members have also been
@@ -4139,27 +4269,6 @@ static llvm::omp::OpenMPOffloadMappingFlags mapParentWithMembers(
   return memberOfFlag;
 }
 
-// The intent is to verify if the mapped data being passed is a
-// pointer -> pointee that requires special handling in certain cases,
-// e.g. applying the OMP_MAP_PTR_AND_OBJ map type.
-//
-// There may be a better way to verify this, but unfortunately with
-// opaque pointers we lose the ability to easily check if something is
-// a pointer whilst maintaining access to the underlying type.
-static bool checkIfPointerMap(omp::MapInfoOp mapOp) {
-  // If we have a varPtrPtr field assigned then the underlying type is a pointer
-  if (mapOp.getVarPtrPtr())
-    return true;
-
-  // If the map data is declare target with a link clause, then it's represented
-  // as a pointer when we lower it to LLVM-IR even if at the MLIR level it has
-  // no relation to pointers.
-  if (isDeclareTargetLink(mapOp.getVarPtr()))
-    return true;
-
-  return false;
-}
-
 // This function is intended to add explicit mappings of members
 static void processMapMembersWithParent(
     LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
@@ -4238,43 +4347,6 @@ static void processMapMembersWithParent(
   }
 }
 
-static void processIndividualMap(MapInfoData &mapData, size_t mapDataIdx,
-                                 MapInfosTy &combinedInfo, bool isTargetParams,
-                                 int mapDataParentIdx = -1) {
-  // Declare Target Mappings are excluded from being marked as
-  // OMP_MAP_TARGET_PARAM as they are not passed as parameters, they're
-  // marked with OMP_MAP_PTR_AND_OBJ instead.
-  auto mapFlag = mapData.Types[mapDataIdx];
-  auto mapInfoOp = llvm::cast<omp::MapInfoOp>(mapData.MapClause[mapDataIdx]);
-
-  bool isPtrTy = checkIfPointerMap(mapInfoOp);
-  if (isPtrTy)
-    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
-
-  if (isTargetParams && !mapData.IsDeclareTarget[mapDataIdx])
-    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
-
-  if (mapInfoOp.getMapCaptureType() == omp::VariableCaptureKind::ByCopy &&
-      !isPtrTy)
-    mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
-
-  // if we're provided a mapDataParentIdx, then the data being mapped is
-  // part of a larger object (in a parent <-> member mapping) and in this
-  // case our BasePointer should be the parent.
-  if (mapDataParentIdx >= 0)
-    combinedInfo.BasePointers.emplace_back(
-        mapData.BasePointers[mapDataParentIdx]);
-  else
-    combinedInfo.BasePointers.emplace_back(mapData.BasePointers[mapDataIdx]);
-
-  combinedInfo.Pointers.emplace_back(mapData.Pointers[mapDataIdx]);
-  combinedInfo.DevicePointers.emplace_back(mapData.DevicePointers[mapDataIdx]);
-  combinedInfo.Mappers.emplace_back(mapData.Mappers[mapDataIdx]);
-  combinedInfo.Names.emplace_back(mapData.Names[mapDataIdx]);
-  combinedInfo.Types.emplace_back(mapFlag);
-  combinedInfo.Sizes.emplace_back(mapData.Sizes[mapDataIdx]);
-}
-
 static void processMapWithMembersOf(LLVM::ModuleTranslation &moduleTranslation,
                                     llvm::IRBuilderBase &builder,
                                     llvm::OpenMPIRBuilder &ompBuilder,
@@ -4309,12 +4381,23 @@ static void processMapWithMembersOf(LLVM::ModuleTranslation &moduleTranslation,
     return;
   }
 
-  llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
-      mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
-                           combinedInfo, mapData, mapDataIndex, isTargetParams);
-  processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
-                              combinedInfo, mapData, mapDataIndex,
-                              memberOfParentFlag);
+  // move this/fix this to a better location once we know how it's going to work
+  // with the derived types... this is mainly for testing
+  auto mapFlag =
+      llvm::omp::OpenMPOffloadMappingFlags(parentClause.getMapType());
+  if ((mapFlag & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH) ==
+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ATTACH) {
+    processAttachMap(moduleTranslation, builder, ompBuilder, dl, combinedInfo,
+                     mapData, mapDataIndex, isTargetParams);
+  } else {
+    llvm::omp::OpenMPOffloadMappingFlags memberOfParentFlag =
+        mapParentWithMembers(moduleTranslation, builder, ompBuilder, dl,
+                             combinedInfo, mapData, mapDataIndex,
+                             isTargetParams);
+    processMapMembersWithParent(moduleTranslation, builder, ompBuilder, dl,
+                                combinedInfo, mapData, mapDataIndex,
+                                memberOfParentFlag);
+  }
 }
 
 // This is a variation on Clang's GenerateOpenMPCapturedVars, which

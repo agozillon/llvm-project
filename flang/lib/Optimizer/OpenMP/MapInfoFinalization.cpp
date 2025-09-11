@@ -274,7 +274,8 @@ class MapInfoFinalizationPass
                               mlir::omp::TargetUpdateOp>(target))
       return mapTypeFlag;
 
-    mapFlags flags = mapFlags::OMP_MAP_TO |
+    // TODO: Check if we need MAP_ALWAYS anymore with the attach semantics.
+    mapFlags flags = mapFlags::OMP_MAP_TO | mapFlags::OMP_MAP_ATTACH |
                      (mapFlags(mapTypeFlag) &
                       (mapFlags::OMP_MAP_IMPLICIT | mapFlags::OMP_MAP_CLOSE |
                        mapFlags::OMP_MAP_ALWAYS));
