@@ -70,9 +70,6 @@ class MapsForPrivatizedSymbolsPass
       return size <= ptrSize && align <= ptrAlign;
     };
 
-    uint64_t mapTypeTo = static_cast<
-        std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
     Operation *definingOp = var.getDefiningOp();
 
     Value varPtr = var;
@@ -122,8 +119,7 @@ class MapsForPrivatizedSymbolsPass
         builder, loc, varPtr.getType(), varPtr,
         TypeAttr::get(llvm::cast<omp::PointerLikeType>(varPtr.getType())
                           .getElementType()),
-        builder.getIntegerAttr(builder.getIntegerType(64, /*isSigned=*/false),
-                               mapTypeTo),
+        builder.getAttr<omp::ClauseMapFlagsAttr>(omp::ClauseMapFlags::to),
         builder.getAttr<omp::VariableCaptureKindAttr>(captureKind),
         /*varPtrPtr=*/Value{},
         /*members=*/SmallVector<Value>{},

@@ -120,12 +120,9 @@ class AutomapToTargetDataPass
           builder, memOp.getLoc(), memOp.getMemref().getType(),
           memOp.getMemref(),
           TypeAttr::get(fir::unwrapRefType(memOp.getMemref().getType())),
-          builder.getIntegerAttr(
-              builder.getIntegerType(64, false),
-              static_cast<unsigned>(
-                  isa<fir::StoreOp>(memOp)
-                      ? llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO
-                      : llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE)),
+          builder.getAttr<omp::ClauseMapFlagsAttr>(
+              isa<fir::StoreOp>(memOp) ? omp::ClauseMapFlags::to
+                                       : omp::ClauseMapFlags::del),
           builder.getAttr<omp::VariableCaptureKindAttr>(
               omp::VariableCaptureKind::ByCopy),
           /*var_ptr_ptr=*/mlir::Value{},
